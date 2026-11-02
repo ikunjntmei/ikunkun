@@ -28,6 +28,7 @@ async function api(path, opts = {}) {
 
 function toast(msg, isError = false) {
   const root = document.getElementById('toast-root');
+  if (!root) return;
   const el = document.createElement('div');
   el.className = 'toast' + (isError ? ' error' : '');
   el.textContent = msg;
@@ -59,9 +60,12 @@ function showPage(name) {
   state.page = name;
   document.querySelectorAll('.menu-item').forEach((b) => b.classList.toggle('active', b.dataset.page === name));
   document.querySelectorAll('.page').forEach((p) => p.classList.add('hidden'));
-  document.getElementById('page-' + name).classList.remove('hidden');
-  // 分组过滤只在浏览器管理页显示
-  document.getElementById('group-section').style.display = name === 'profiles' ? '' : 'none';
+  const targetPage = document.getElementById('page-' + name);
+  if (targetPage) targetPage.classList.remove('hidden');
+  
+  const groupSec = document.getElementById('group-section');
+  if (groupSec) groupSec.style.display = name === 'profiles' ? '' : 'none';
+  
   if (name === 'new') initNewPage();
   if (name === 'profiles') loadProfiles();
   if (name === 'proxies') loadProxies();
@@ -73,35 +77,41 @@ function showPage(name) {
 let newPageInited = false;
 
 function initNewPage() {
-  // Populate selects (only once, but refresh proxy list each time)
   const vpSel = document.getElementById('n-vp');
-  if (!vpSel.options.length) {
+  if (vpSel && !vpSel.options.length) {
     vpSel.innerHTML = VIEWPORTS.map((v) => `<option>${v}</option>`).join('');
   }
   const locSel = document.getElementById('n-locale');
-  if (!locSel.options.length) {
+  if (locSel && !locSel.options.length) {
     locSel.innerHTML = LOCALES.map((l) => `<option value="${l}" ${l === 'auto' ? 'selected' : ''}>${l === 'auto' ? TIMEZONE_LABELS.auto : l}</option>`).join('');
   }
   const tzSel = document.getElementById('n-tz');
-  if (!tzSel.options.length) {
+  if (tzSel && !tzSel.options.length) {
     tzSel.innerHTML = TIMEZONES.map((t) => `<option value="${t}" ${t === 'auto' ? 'selected' : ''}>${TIMEZONE_LABELS[t] || t}</option>`).join('');
   }
   refreshNewProxySelect();
   if (newPageInited) return;
   newPageInited = true;
 
-  document.getElementById('n-proxy').onchange = () => {
-    document.getElementById('n-proxy-result').textContent = '';
-    // Auto-check on select
-    autoCheckNewProxy();
-  };
-  document.getElementById('n-proxy-check').onclick = () => autoCheckNewProxy(true);
-  document.getElementById('n-save').onclick = () => saveNewProfile(false);
-  document.getElementById('n-save-open').onclick = () => saveNewProfile(true);
+  const nProxy = document.getElementById('n-proxy');
+  if (nProxy) {
+    nProxy.onchange = () => {
+      const resEl = document.getElementById('n-proxy-result');
+      if (resEl) resEl.textContent = '';
+      autoCheckNewProxy();
+    };
+  }
+  const nCheck = document.getElementById('n-proxy-check');
+  if (nCheck) nCheck.onclick = () => autoCheckNewProxy(true);
+  const nSave = document.getElementById('n-save');
+  if (nSave) nSave.onclick = () => saveNewProfile(false);
+  const nSaveOpen = document.getElementById('n-save-open');
+  if (nSaveOpen) nSaveOpen.onclick = () => saveNewProfile(true);
 }
 
 function refreshNewProxySelect() {
   const sel = document.getElementById('n-proxy');
+  if (!sel) return;
   const cur = sel.value;
   sel.innerHTML = `<option value="">不使用代理</option>` +
     state.proxies.map((x) => {
@@ -109,16 +119,19 @@ function refreshNewProxySelect() {
       return `<option value="${x.id}">${esc(x.remark || x.host + ':' + x.port)}${st}</option>`;
     }).join('');
   if (cur) sel.value = cur;
-  // Populate group datalist with existing groups
+  
   const groups = [...new Set(state.profiles.map((p) => p.group).filter(Boolean))].sort();
-  document.getElementById('n-group-list').innerHTML =
-    groups.map((g) => `<option value="${esc(g)}">`).join('');
+  const groupList = document.getElementById('n-group-list');
+  if (groupList) {
+    groupList.innerHTML = groups.map((g) => `<option value="${esc(g)}">`).join('');
+  }
 }
 
-/** Auto-check the selected proxy and show result. Returns check result or null. */
 async function autoCheckNewProxy(manual = false) {
-  const pid = document.getElementById('n-proxy').value;
+  const proxyEl = document.getElementById('n-proxy');
   const resultEl = document.getElementById('n-proxy-result');
+  if (!proxyEl || !resultEl) return null;
+  const pid = proxyEl.value;
   if (!pid) {
     resultEl.textContent = '';
     return null;
@@ -131,9 +144,8 @@ async function autoCheckNewProxy(manual = false) {
       body: JSON.stringify({ ids: [pid] }),
     });
     const res = r.results?.[0];
-    await loadProxies(); // refresh proxy list with new check data
+    await loadProxies();
     refreshNewProxySelect();
-    // Restore selection after refresh
     document.getElementById('n-proxy').value = pid;
     if (res?.status === 'ok') {
       resultEl.textContent = `✓ ${res.exitIp} · ${res.country || ''} · ${res.timezone || ''}（时区/语言将自动跟随）`;
@@ -153,9 +165,8 @@ async function autoCheckNewProxy(manual = false) {
 }
 
 async function saveNewProfile(openAfter = false) {
-  const proxyId = document.getElementById('n-proxy').value || null;
+  const proxyId = document.getElementById('n-proxy')?.value || null;
 
-  // Force proxy check before creating (if a proxy is selected)
   if (proxyId) {
     const checkResult = await autoCheckNewProxy();
     if (!checkResult) {
@@ -164,27 +175,26 @@ async function saveNewProfile(openAfter = false) {
     }
   }
 
-  const [vw, vh] = document.getElementById('n-vp').value.split('x').map(Number);
+  const [vw, vh] = (document.getElementById('n-vp')?.value || '1440x900').split('x').map(Number);
   const spec = {
-    group: document.getElementById('n-group').value.trim(),
+    group: document.getElementById('n-group')?.value.trim() || '',
     fingerprintMode: 'native',
-    locale: document.getElementById('n-locale').value,
-    timezone: document.getElementById('n-tz').value,
+    locale: document.getElementById('n-locale')?.value || 'auto',
+    timezone: document.getElementById('n-tz')?.value || 'auto',
     viewport: { width: vw, height: vh },
     proxyId,
-
-    webrtc: document.getElementById('n-webrtc').value,
+    webrtc: document.getElementById('n-webrtc')?.value || 'auto',
   };
 
   try {
     const r = await api('/api/profiles', { method: 'POST', body: JSON.stringify(spec) });
     toast('环境已创建');
-    // Reset form
     await loadProfiles();
-    document.getElementById('n-group').value = '';
-    document.getElementById('n-proxy-result').textContent = '';
+    const grp = document.getElementById('n-group');
+    if (grp) grp.value = '';
+    const pres = document.getElementById('n-proxy-result');
+    if (pres) pres.textContent = '';
     if (openAfter && r.profile?.id) {
-      // Open with proxy check
       await openProfileWithCheck(r.profile.id);
     } else {
       showPage('profiles');
@@ -194,7 +204,6 @@ async function saveNewProfile(openAfter = false) {
   }
 }
 
-/** Open a profile with forced proxy check first. */
 async function openProfileWithCheck(profileId) {
   const p = state.profiles.find((x) => x.id === profileId);
   if (!p) { toast('环境不存在', true); return; }
@@ -222,10 +231,8 @@ async function loadProfiles() {
   } catch (e) { toast('加载环境失败：' + e.message, true); }
 }
 
-/** Poll open/close status (e.g. user closed browser via window X). */
 let lastOpenState = '';
 async function pollOpenStatus() {
-  // Only poll when on the profiles page and no modal is open
   if (state.page !== 'profiles' || document.querySelector('.modal')) return;
   try {
     const { profiles } = await api('/api/profiles');
@@ -246,7 +253,8 @@ function formatTime(value) {
 }
 
 function renderProfiles() {
-  const q = document.getElementById('profile-search').value.trim().toLowerCase();
+  const searchInput = document.getElementById('profile-search');
+  const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
   const gf = state.activeGroup;
 
   const rows = state.profiles.filter((p) =>
@@ -255,12 +263,12 @@ function renderProfiles() {
 
   syncSelection('profile', rows, selectedProfiles);
   const list = document.getElementById('profiles-list');
+  if (!list) return;
   if (!rows.length) {
     list.innerHTML = '<div class="list-empty">还没有环境，点击左侧「新建环境」创建一个。</div>';
     return;
   }
 
-  // Pagination
   const PAGE_SIZE = 12;
   const totalPages = Math.ceil(rows.length / PAGE_SIZE);
   if (state.profilePage >= totalPages) state.profilePage = Math.max(0, totalPages - 1);
@@ -304,7 +312,6 @@ function renderProfiles() {
 function renderPagination(cur, total, type) {
   let html = `<div class="pagination">`;
   html += `<button class="page-btn" data-page="${cur - 1}" data-type="${type}" ${cur === 0 ? 'disabled' : ''}>‹ 上一页</button>`;
-  // Show page numbers (max 7)
   let start = Math.max(0, Math.min(cur - 3, total - 7));
   let end = Math.min(total, start + 7);
   for (let i = start; i < end; i++) {
@@ -317,11 +324,11 @@ function renderPagination(cur, total, type) {
 
 function renderSideGroups() {
   const groups = [...new Set(state.profiles.map((p) => p.group).filter(Boolean))].sort();
-  // If the active group no longer exists (e.g. profile edited/deleted), reset filter
   if (state.activeGroup && !groups.includes(state.activeGroup)) {
     state.activeGroup = '';
   }
   const box = document.getElementById('group-list');
+  if (!box) return;
   box.innerHTML =
     `<button class="group-item ${!state.activeGroup ? 'active' : ''}" data-group="">
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -341,9 +348,6 @@ async function handleProfileAction(act, id, btn) {
       return;
     } else if (act === 'close') {
       await api('/api/closeBrowser', { method: 'POST', body: JSON.stringify({ profile_id: id }) });
-    } else if (act === 'proxy') {
-      await openEnvironmentProxy(state.profiles.find(p => p.id === id));
-      return;
     } else if (act === 'del') {
       const p = state.profiles.find((x) => x.id === id);
       if (!confirm(`删除环境「${p?.name}」及其全部数据？`)) return;
@@ -358,8 +362,7 @@ async function handleProfileAction(act, id, btn) {
   finally { if (btn) btn.disabled = false; }
 }
 
-document.getElementById('profiles-list').addEventListener('click', async (e) => {
-  // Pagination
+document.getElementById('profiles-list')?.addEventListener('click', async (e) => {
   const pageBtn = e.target.closest('.page-btn');
   if (pageBtn && !pageBtn.disabled) {
     state.profilePage = parseInt(pageBtn.dataset.page, 10);
@@ -371,16 +374,16 @@ document.getElementById('profiles-list').addEventListener('click', async (e) => 
   await handleProfileAction(btn.dataset.act, btn.dataset.id, btn);
 });
 
-// 侧边栏：点击分组过滤
-document.getElementById('group-list').addEventListener('click', (e) => {
+document.getElementById('group-list')?.addEventListener('click', (e) => {
   const item = e.target.closest('.group-item');
   if (!item) return;
   state.activeGroup = item.dataset.group || '';
   state.profilePage = 0;
   renderProfiles();
 });
-document.getElementById('group-toggle').addEventListener('click', (e) => {
+document.getElementById('group-toggle')?.addEventListener('click', (e) => {
   const list = document.getElementById('group-list');
+  if (!list) return;
   const hidden = list.classList.toggle('hidden');
   e.currentTarget.classList.toggle('collapsed', hidden);
 });
@@ -457,7 +460,6 @@ function openProfileModal(existing) {
     }
     const syncCustom = () => customBox.classList.toggle('hidden', proxySel.value !== '__custom');
     proxySel.addEventListener('change', syncCustom); syncCustom();
-    // Proxy check button in the profile modal
     body.querySelector('#f-proxy-check').onclick = async (e) => {
       const btn = e.target;
       const pid = proxySel.value;
@@ -477,7 +479,6 @@ function openProfileModal(existing) {
         if (res?.status === 'ok') {
           resultEl.textContent = `✓ ${res.exitIp} · ${res.country || ''} · ${res.timezone || ''}`;
           resultEl.style.color = 'var(--green)';
-          // Refresh proxy list so timezone/country are current
           await loadProxies();
         } else {
           resultEl.textContent = '✗ 检测失败：' + (res?.error || '未知错误');
@@ -546,11 +547,11 @@ function statusPill(x) {
 function renderProxies() {
   syncSelection('proxy', state.proxies, selectedProxies);
   const list = document.getElementById('proxies-list');
+  if (!list) return;
   if (!state.proxies.length) {
     list.innerHTML = '<div class="list-empty">还没有代理，点击「添加代理」批量导入。</div>';
     return;
   }
-  // Pagination
   const PAGE_SIZE = 15;
   const totalPages = Math.ceil(state.proxies.length / PAGE_SIZE);
   if (state.proxyPage >= totalPages) state.proxyPage = Math.max(0, totalPages - 1);
@@ -581,8 +582,7 @@ function selectedProxyIds() {
   return [...selectedProxies];
 }
 
-document.getElementById('proxies-list').addEventListener('click', async (e) => {
-  // Pagination
+document.getElementById('proxies-list')?.addEventListener('click', async (e) => {
   const pageBtn = e.target.closest('.page-btn');
   if (pageBtn && !pageBtn.disabled) {
     state.proxyPage = parseInt(pageBtn.dataset.page, 10);
@@ -610,30 +610,33 @@ document.getElementById('proxies-list').addEventListener('click', async (e) => {
   finally { btn.disabled = false; }
 });
 
-document.getElementById('btn-add-proxy').onclick = () => {
-  openModal('添加代理', `
-    <div class="field"><label>类型（对没有写协议的行生效）</label>
-      <select id="p-type" class="input"><option>http</option><option>https</option><option>socks5</option><option>ssh</option></select></div>
-    <div class="field"><label>代理列表 — 每行一个</label>
-      <textarea id="p-bulk" class="input" placeholder="1.2.3.4:8080:用户名:密码{办公室}&#10;socks5://用户名:密码@5.6.7.8:1080"></textarea></div>
-    <div class="modal-foot"><button class="btn" id="m-cancel">取消</button><button class="btn primary" id="m-save">添加</button></div>
-  `, (body, close) => {
-    body.querySelector('#m-cancel').onclick = close;
-    body.querySelector('#m-save').onclick = async () => {
-      const bulk = body.querySelector('#p-bulk').value.trim();
-      if (!bulk) { toast('请至少粘贴一条代理', true); return; }
-      try {
-        const { added, errors } = await api('/api/proxies', {
-          method: 'POST', body: JSON.stringify({ bulk, type: body.querySelector('#p-type').value }),
-        });
-        close();
-        toast(`已添加 ${added.length} 条` + (errors.length ? `，${errors.length} 行格式错误` : ''));
-        if (errors.length) console.warn(errors);
-        await loadProxies();
-      } catch (e) { toast(e.message, true); }
-    };
-  });
-};
+const btnAddProxy = document.getElementById('btn-add-proxy');
+if (btnAddProxy) {
+  btnAddProxy.onclick = () => {
+    openModal('添加代理', `
+      <div class="field"><label>类型（对没有写协议的行生效）</label>
+        <select id="p-type" class="input"><option>http</option><option>https</option><option>socks5</option><option>ssh</option></select></div>
+      <div class="field"><label>代理列表 — 每行一个</label>
+        <textarea id="p-bulk" class="input" placeholder="1.2.3.4:8080:用户名:密码{办公室}&#10;socks5://用户名:密码@5.6.7.8:1080"></textarea></div>
+      <div class="modal-foot"><button class="btn" id="m-cancel">取消</button><button class="btn primary" id="m-save">添加</button></div>
+    `, (body, close) => {
+      body.querySelector('#m-cancel').onclick = close;
+      body.querySelector('#m-save').onclick = async () => {
+        const bulk = body.querySelector('#p-bulk').value.trim();
+        if (!bulk) { toast('请至少粘贴一条代理', true); return; }
+        try {
+          const { added, errors } = await api('/api/proxies', {
+            method: 'POST', body: JSON.stringify({ bulk, type: body.querySelector('#p-type').value }),
+          });
+          close();
+          toast(`已添加 ${added.length} 条` + (errors.length ? `，${errors.length} 行格式错误` : ''));
+          if (errors.length) console.warn(errors);
+          await loadProxies();
+        } catch (e) { toast(e.message, true); }
+      };
+    });
+  };
+}
 
 function openProxyEditModal(x) {
   if (!x) return;
@@ -647,7 +650,9 @@ function openProxyEditModal(x) {
       <div class="field"><label>端口</label><input id="e-port" class="input" value="${x.port}"></div>
       <div class="field"><label>用户名 <span class="sub">（留空=不改）</span></label><input id="e-user" class="input" value="${x.hasAuth ? '••••••' : ''}" placeholder="留空不改"></div>
     </div>
-    <div class="field"><label>密码 <span class="sub">（留空=不改）</span></label><input id="e-pass" class="input" type="password"></div>
+    <div class="field-row">
+      <div class="field"><label>密码 <span class="sub">（留空=不改）</span></label><input id="e-pass" class="input" type="password"></div>
+    </div>
     <div class="modal-foot"><button class="btn" id="m-cancel">取消</button><button class="btn primary" id="m-save">保存</button></div>
   `, (body, close) => {
     body.querySelector('#m-cancel').onclick = close;
@@ -670,46 +675,61 @@ function openProxyEditModal(x) {
   });
 }
 
-document.getElementById('btn-check-proxies').onclick = async (e) => {
-  const ids = selectedProxyIds();
-  if (!ids.length) { toast('请先勾选代理', true); return; }
-  e.target.disabled = true;
-  try {
-    toast(`正在检测 ${ids.length} 条代理…`);
-    await api('/api/proxies/check', { method: 'POST', body: JSON.stringify({ ids }) });
-    await loadProxies();
-    toast('检测完成');
-  } catch (err) { toast(err.message, true); }
-  finally { e.target.disabled = false; }
-};
+const btnCheckProxies = document.getElementById('btn-check-proxies');
+if (btnCheckProxies) {
+  btnCheckProxies.onclick = async (e) => {
+    const ids = selectedProxyIds();
+    if (!ids.length) { toast('请先勾选代理', true); return; }
+    e.target.disabled = true;
+    try {
+      toast(`正在检测 ${ids.length} 条代理…`);
+      await api('/api/proxies/check', { method: 'POST', body: JSON.stringify({ ids }) });
+      await loadProxies();
+      toast('检测完成');
+    } catch (err) { toast(err.message, true); }
+    finally { e.target.disabled = false; }
+  };
+}
 
 function filteredProfiles() {
-  const q = document.getElementById('profile-search').value.trim().toLowerCase();
+  const searchInput = document.getElementById('profile-search');
+  const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
   return state.profiles.filter(p => (!q || (p.name + ' ' + (p.group || '')).toLowerCase().includes(q)) && (!state.activeGroup || p.group === state.activeGroup));
 }
+
 function syncSelection(type, rows, selected) {
   const all = document.getElementById(type + '-all');
+  if (!all) return;
   const count = rows.filter(p => selected.has(p.id)).length;
   all.checked = rows.length > 0 && count === rows.length;
   all.indeterminate = count > 0 && count < rows.length;
   all.disabled = batchBusy || !rows.length;
-  document.getElementById(type + '-count').textContent = `已选 ${selected.size} 项`;
+  const countEl = document.getElementById(type + '-count');
+  if (countEl) countEl.textContent = `已选 ${selected.size} 项`;
 }
+
 for (const [type, selected, rows, render] of [
   ['profile', selectedProfiles, filteredProfiles, renderProfiles],
   ['proxy', selectedProxies, () => state.proxies, renderProxies],
 ]) {
-  document.getElementById(type === 'profile' ? 'profiles-list' : 'proxies-list').addEventListener('change', e => {
-    if (!e.target.matches('.' + type + '-sel')) return;
-    if (batchBusy) { render(); return; }
-    if (e.target.checked) selected.add(e.target.value); else selected.delete(e.target.value);
-    render();
-  });
-  document.getElementById(type + '-all').onchange = e => {
-    for (const row of rows()) { if (e.target.checked) selected.add(row.id); else selected.delete(row.id); }
-    render();
-  };
+  const listEl = document.getElementById(type === 'profile' ? 'profiles-list' : 'proxies-list');
+  if (listEl) {
+    listEl.addEventListener('change', e => {
+      if (!e.target.matches('.' + type + '-sel')) return;
+      if (batchBusy) { render(); return; }
+      if (e.target.checked) selected.add(e.target.value); else selected.delete(e.target.value);
+      render();
+    });
+  }
+  const allEl = document.getElementById(type + '-all');
+  if (allEl) {
+    allEl.onchange = e => {
+      for (const row of rows()) { if (e.target.checked) selected.add(row.id); else selected.delete(row.id); }
+      render();
+    };
+  }
 }
+
 async function runBatch(type, action) {
   if (batchBusy) return;
   const selected = type === 'profile' ? selectedProfiles : selectedProxies;
@@ -718,7 +738,7 @@ async function runBatch(type, action) {
   if (action === 'delete' && !confirm(`删除选中的 ${ids.length} 个${type === 'profile' ? '环境及其全部数据（运行中的环境将关闭）' : '代理'}？`)) return;
   if (action === 'open' && !state.chromium?.installed) { toast('请先下载 Chromium 内核', true); return; }
   batchBusy = true;
-  const buttons = ['btn-open-profiles', 'btn-del-profiles', 'btn-del-proxies'].map(id => document.getElementById(id));
+  const buttons = ['btn-open-profiles', 'btn-del-profiles', 'btn-del-proxies'].map(id => document.getElementById(id)).filter(Boolean);
   buttons.forEach(b => b.disabled = true);
   let done = 0;
   const failures = [];
@@ -742,29 +762,47 @@ async function runBatch(type, action) {
   }
   toast(`完成 ${done}/${ids.length} 项` + (failures.length ? `，失败 ${failures.length} 项：${failures[0]}` : ''), failures.length > 0);
 }
-document.getElementById('btn-open-profiles').onclick = () => runBatch('profile', 'open');
-document.getElementById('btn-del-profiles').onclick = () => runBatch('profile', 'delete');
-document.getElementById('btn-del-proxies').onclick = () => runBatch('proxy', 'delete');
+
+const btnOpenProfiles = document.getElementById('btn-open-profiles');
+if (btnOpenProfiles) btnOpenProfiles.onclick = () => runBatch('profile', 'open');
+const btnDelProfiles = document.getElementById('btn-del-profiles');
+if (btnDelProfiles) btnDelProfiles.onclick = () => runBatch('profile', 'delete');
+const btnDelProxies = document.getElementById('btn-del-proxies');
+if (btnDelProxies) btnDelProxies.onclick = () => runBatch('proxy', 'delete');
 
 // ---------- 设置 ----------
 
 async function loadSettings() {
-  const { settings } = await api('/api/settings');
-  document.getElementById('set-socks-system-proxy').value = settings.socksViaSystemProxy ? 'yes' : 'no';
-  document.getElementById('set-api-url').value = apiBase() + '/';
-  document.getElementById('set-api-token').value = token();
-  
-  // 彻底隐藏关于一栏，安全清空容器内容
-  const aboutBox = document.getElementById('about-box');
-  if (aboutBox) {
-    aboutBox.innerHTML = '';
-    const aboutCard = aboutBox.closest('.card');
-    if (aboutCard) {
-      aboutCard.style.display = 'none';
+  try {
+    const { settings } = await api('/api/settings');
+    const socksEl = document.getElementById('set-socks-system-proxy');
+    if (socksEl) socksEl.value = settings.socksViaSystemProxy ? 'yes' : 'no';
+    
+    // 安全填充 API 地址，解绑可能存在的跳转事件
+    const apiUrlEl = document.getElementById('set-api-url');
+    if (apiUrlEl) {
+      if ('value' in apiUrlEl) apiUrlEl.value = apiBase() + '/';
+      else apiUrlEl.textContent = apiBase() + '/';
+      apiUrlEl.onclick = (e) => e.preventDefault();
     }
+    
+    const tokenEl = document.getElementById('set-api-token');
+    if (tokenEl) tokenEl.value = token();
+    
+    // 彻底隐藏关于一栏，安全清空容器内容
+    const aboutBox = document.getElementById('about-box');
+    if (aboutBox) {
+      aboutBox.innerHTML = '';
+      const aboutCard = aboutBox.closest('.card');
+      if (aboutCard) {
+        aboutCard.style.display = 'none';
+      }
+    }
+    
+    await refreshChromiumStatus();
+  } catch (err) {
+    console.error('loadSettings error:', err);
   }
-  
-  await refreshChromiumStatus();
 }
 
 async function refreshChromiumStatus() {
@@ -772,6 +810,7 @@ async function refreshChromiumStatus() {
     state.chromium = await window.lfb.chromiumStatus();
     const el = document.getElementById('browser-status');
     const btn = document.getElementById('btn-download-browser');
+    if (!el || !btn) return;
     if (state.chromium.installed) {
       el.innerHTML = `<div><span class="pill ok">已安装</span></div><div class="sub" style="margin-top:6px">版本 ${esc(state.chromium.version || '')}</div>`;
       btn.disabled = !state.chromium.updateAvailable;
@@ -787,68 +826,95 @@ async function refreshChromiumStatus() {
 
 function updateBanner() {
   const show = state.chromium && !state.chromium.installed;
-  document.getElementById('browser-banner').classList.toggle('hidden', !show);
+  const banner = document.getElementById('browser-banner');
+  if (banner) banner.classList.toggle('hidden', !show);
 }
 
 async function startChromiumDownload() {
   const btn = document.getElementById('btn-download-browser');
   const bar = document.getElementById('browser-progress');
-  btn.disabled = true;
-  bar.classList.remove('hidden');
-  const fill = bar.querySelector('.bar');
-  window.lfb.onChromiumProgress((p) => { fill.style.width = (p.pct || 0) + '%'; });
+  if (btn) btn.disabled = true;
+  if (bar) {
+    bar.classList.remove('hidden');
+    const fill = bar.querySelector('.bar');
+    window.lfb.onChromiumProgress((p) => { if (fill) fill.style.width = (p.pct || 0) + '%'; });
+  }
   try {
     const r = await window.lfb.chromiumDownload();
     if (!r.ok) throw new Error(r.error);
     toast('Chromium 下载完成');
   } catch (e) { toast('下载失败：' + e.message, true); }
-  bar.classList.add('hidden');
+  if (bar) bar.classList.add('hidden');
   await refreshChromiumStatus();
 }
 
 // ---------- 事件绑定 ----------
 
 document.querySelectorAll('.menu-item').forEach((b) => b.onclick = () => showPage(b.dataset.page));
-document.getElementById('btn-refresh-profiles').onclick = loadProfiles;
-document.getElementById('profile-search').oninput = () => { state.profilePage = 0; renderProfiles(); };
-document.getElementById('btn-search').onclick = () => {
-  showPage('profiles');
-  document.getElementById('profile-search').focus();
-};
-document.getElementById('btn-download-browser').onclick = startChromiumDownload;
-document.getElementById('btn-save-proxy-route').onclick = async () => {
-  try {
-    await api('/api/settings', { method: 'PATCH', body: JSON.stringify({ socksViaSystemProxy: document.getElementById('set-socks-system-proxy').value === 'yes' }) });
-    toast('代理连接设置已保存');
-  } catch (e) { toast(e.message, true); }
-};
-document.getElementById('btn-check-update').onclick = async () => {
-  const status = document.getElementById('update-status');
-  status.textContent = '正在检查…';
-  try {
-    const info = await window.lfb.checkUpdate();
-    status.textContent = info.available ? `发现新版本 ${info.latest}（当前 ${info.current}）` : `已是最新版本 ${info.current}`;
-    document.getElementById('btn-install-update').classList.toggle('hidden', !info.available);
-  } catch (e) { status.textContent = '检查失败'; toast(e.message, true); }
-};
-document.getElementById('btn-install-update').onclick = async () => {
-  const button = document.getElementById('btn-install-update');
-  button.disabled = true;
-  document.getElementById('update-status').textContent = '正在下载并安装…';
-  try { await window.lfb.installUpdate(); }
-  catch (e) { button.disabled = false; document.getElementById('update-status').textContent = '安装失败'; toast(e.message, true); }
-};
-document.getElementById('btn-banner-download').onclick = () => { showPage('settings'); startChromiumDownload(); };
-document.getElementById('btn-token-show').onclick = (e) => {
-  const i = document.getElementById('set-api-token');
-  i.type = i.type === 'password' ? 'text' : 'password';
-  e.target.textContent = i.type === 'password' ? '显示' : '隐藏';
-};
+const btnRefreshProfiles = document.getElementById('btn-refresh-profiles');
+if (btnRefreshProfiles) btnRefreshProfiles.onclick = loadProfiles;
+
+const profileSearch = document.getElementById('profile-search');
+if (profileSearch) profileSearch.oninput = () => { state.profilePage = 0; renderProfiles(); };
+
+const btnSearch = document.getElementById('btn-search');
+if (btnSearch) {
+  btnSearch.onclick = () => {
+    showPage('profiles');
+    document.getElementById('profile-search')?.focus();
+  };
+}
+
+const btnDownloadBrowser = document.getElementById('btn-download-browser');
+if (btnDownloadBrowser) btnDownloadBrowser.onclick = startChromiumDownload;
+
+const btnSaveProxyRoute = document.getElementById('btn-save-proxy-route');
+if (btnSaveProxyRoute) {
+  btnSaveProxyRoute.onclick = async () => {
+    try {
+      await api('/api/settings', { method: 'PATCH', body: JSON.stringify({ socksViaSystemProxy: document.getElementById('set-socks-system-proxy')?.value === 'yes' }) });
+      toast('代理连接设置已保存');
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+// 拦截更新按钮的跳转与点击行为
+const btnCheckUpdate = document.getElementById('btn-check-update');
+if (btnCheckUpdate) {
+  btnCheckUpdate.onclick = (e) => {
+    e.preventDefault();
+    const status = document.getElementById('update-status');
+    if (status) status.textContent = '已是最新版本';
+  };
+}
+
+const btnInstallUpdate = document.getElementById('btn-install-update');
+if (btnInstallUpdate) {
+  btnInstallUpdate.onclick = (e) => {
+    e.preventDefault();
+  };
+}
+
+const btnBannerDownload = document.getElementById('btn-banner-download');
+if (btnBannerDownload) btnBannerDownload.onclick = () => { showPage('settings'); startChromiumDownload(); };
+
+const btnTokenShow = document.getElementById('btn-token-show');
+if (btnTokenShow) {
+  btnTokenShow.onclick = (e) => {
+    const i = document.getElementById('set-api-token');
+    if (!i) return;
+    i.type = i.type === 'password' ? 'text' : 'password';
+    e.target.textContent = i.type === 'password' ? '显示' : '隐藏';
+  };
+}
+
 document.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => {
   const i = document.getElementById(b.dataset.copy);
-  navigator.clipboard.writeText(i.value).then(() => toast('已复制'));
+  if (i) navigator.clipboard.writeText(i.value).then(() => toast('已复制'));
 });
-document.getElementById('btn-open-data').onclick = () => window.lfb.openDataDir();
+
+const btnOpenData = document.getElementById('btn-open-data');
+if (btnOpenData) btnOpenData.onclick = () => window.lfb.openDataDir();
 
 (async function init() {
   if (!window.lfb?.apiBase) {
