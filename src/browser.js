@@ -121,9 +121,13 @@ class BrowserManager {
         args: [
           '--no-first-run',
           '--no-default-browser-check',
+          '--check-for-update-interval=31536000',
+          '--disable-component-update',
           '--site-per-process',
           '--disable-background-mode',
           '--disable-blink-features=AutomationControlled',
+          '--test-type',
+          '--disable-infobars',
           ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
