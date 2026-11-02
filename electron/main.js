@@ -4,7 +4,7 @@
  * Main process starts the local backend (Koa API + profile/browser manager)
  * and hosts the management UI, which talks to the same Local API over HTTP.
  */
-const { app, BrowserWindow, ipcMain, shell, session, safeStorage, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, session, safeStorage, dialog, clipboard } = require('electron');
 const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
@@ -76,6 +76,7 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'CIKE',
+    autoHideMenuBar: true, // 隐藏原生菜单栏，彻底移除顶栏空白
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -95,6 +96,9 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // 全局移除默认的英文 Application Menu（File/Edit/View/Window）
+  Menu.setApplicationMenu(null);
+
   applyChromiumEnv();
   try {
     const requireSafeStorage = () => {
