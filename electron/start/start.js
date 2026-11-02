@@ -1,5 +1,5 @@
 'use strict';
-const config = window.cikeEnvironment;
+const config = window.ikunEnvironment;
 const text = (id, value) => { document.getElementById(id).textContent = value || '未知'; };
 text('name', config.name); text('number', '#' + config.sequence);
 document.title = `#${config.sequence} ${config.name} · 环境检测`;
