@@ -106,10 +106,8 @@ class BrowserManager {
         const { SocksForwarder } = require('./socksfwd');
         const systemProxy = useSystemProxy ? await this.settings.route(proxyRecord.host, proxyRecord.port) : null;
         forwarder = await SocksForwarder.start({ ...proxyRecord, systemProxy });
-        // 关键改动：显式增加 bypass 参数，确保 127.0.0.1 的流量永远不被 Socks 转发器拦截
         proxy = { server: `http://127.0.0.1:${forwarder.port}`, bypass: '127.0.0.1,localhost,<-loopback>' };
       } else if (proxy) {
-        // 确保默认代理同样彻底绕过本地，避免 127/localhost 回环报错
         proxy.bypass = '127.0.0.1,localhost,<-loopback>';
       }
 
@@ -131,7 +129,6 @@ class BrowserManager {
           '--disable-infobars',
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-          // 彻底对齐 Chromium 的 proxy-bypass 行为
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
           ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
@@ -160,33 +157,89 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 原生特征隐身注入
+      // --- 关键注入：彻底切断反爬脚本对 CDP 的探测链路 ---
       await context.addInitScript(() => {
+        // 1. 深度防护 Console 隐式 Getter 探测（核心突破口）
+        // MixVisit / IPhey 检测 CDP 的常见手段是执行类似 console.debug({ get id() { /* CDP 触发 */ } })
+        // 通过代理 console 方法，在传入底层前将探测对象解耦，阻止 CDP 调试器序列化触发 getter
+        try {
+          const methods = ['debug', 'log', 'info', 'warn', 'error', 'table', 'dir', 'trace'];
+          for (const method of methods) {
+            const original = console[method];
+            if (typeof original === 'function') {
+              console[method] = new Proxy(original, {
+                apply(target, thisArg, args) {
+                  try {
+                    const sanitizedArgs = args.map(arg => {
+                      if (arg !== null && typeof arg === 'object' && !(arg instanceof Error)) {
+                        return '[Object]';
+                      }
+                      return arg;
+                    });
+                    return Reflect.apply(target, thisArg, sanitizedArgs);
+                  } catch (_) {
+                    return Reflect.apply(target, thisArg, args);
+                  }
+                }
+              });
+            }
+          }
+        } catch (_) {}
+
+        // 2. 清理自动化注入属性（cdc_ 开头的变量）
+        try {
+          const purgeCDC = () => {
+            const keys = Object.keys(window).concat(Object.keys(document));
+            for (const key of keys) {
+              if (/^cdc_[a-z0-9]/i.test(key)) {
+                try { delete window[key]; } catch (_) {}
+                try { delete document[key]; } catch (_) {}
+              }
+            }
+          };
+          purgeCDC();
+          window.addEventListener('DOMContentLoaded', purgeCDC, { once: true });
+        } catch (_) {}
+
+        // 3. 规范化 navigator.webdriver 状态与原型描述
         try {
           if (navigator.webdriver !== false) {
-            Object.defineProperty(navigator, 'webdriver', {
+            Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
               get: () => false,
-              configurable: true
+              configurable: true,
+              enumerable: true
             });
           }
         } catch (_) {}
 
+        // 4. 补齐 Chrome 专属 brands，对齐正版 Chrome 结构
         try {
           if (navigator.userAgentData) {
             const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
-            const ver = chromeMatch ? chromeMatch[1] : '130';
-            const brands = [
+            const chromeVersion = chromeMatch ? chromeMatch[1] : '130';
+            const completeBrands = [
               { brand: 'Not:A-Brand', version: '8' },
-              { brand: 'Chromium', version: ver },
-              { brand: 'Google Chrome', version: ver }
+              { brand: 'Chromium', version: chromeVersion },
+              { brand: 'Google Chrome', version: chromeVersion }
             ];
+
+            const proto = Object.getPrototypeOf(navigator.userAgentData);
+            if (proto) {
+              Object.defineProperty(proto, 'brands', {
+                get: () => completeBrands,
+                configurable: true,
+                enumerable: true
+              });
+            }
             Object.defineProperty(navigator.userAgentData, 'brands', {
-              get: () => brands,
-              configurable: true
+              get: () => completeBrands,
+              configurable: true,
+              enumerable: true
             });
           }
         } catch (_) {}
 
+        // 5. 确保原生 RTCPeerConnection 存在，阻断非代理外网探测
         try {
           if (typeof window.RTCPeerConnection !== 'undefined') {
             const NativeRTC = window.RTCPeerConnection;
@@ -198,12 +251,17 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        try {
-          const originalDebug = console.debug;
-          console.debug = function (...args) {
-            return originalDebug.apply(console, args);
+        // 6. 补齐 Chrome 运行时结构
+        if (!window.chrome) {
+          window.chrome = {};
+        }
+        if (!window.chrome.runtime) {
+          window.chrome.runtime = {
+            OnInstalledReason: { INSTALL: 'install' },
+            PlatformArch: { X86_64: 'x86-64' },
+            PlatformOs: { WIN: 'win' }
           };
-        } catch (_) {}
+        }
       });
 
       await configureDownloads(context);
