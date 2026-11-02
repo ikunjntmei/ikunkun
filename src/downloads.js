@@ -29,7 +29,8 @@ async function prepareDownloads(profileDirectory, directory = path.join(os.homed
     directory_upgrade: true,
   };
 
-  const temporary = filename + '.cike-downloads';
+  // 临时文件后缀修改为 .ikun-downloads
+  const temporary = filename + '.ikun-downloads';
   try {
     await fs.writeFile(temporary, JSON.stringify(preferences), { mode: 0o600 });
     await fs.rename(temporary, filename);
