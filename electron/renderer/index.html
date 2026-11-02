@@ -226,7 +226,7 @@
 
   <script src="app.js"></script>
   <script>
-    // 监听左下角版本节点，剔除两处 0.7.0 并清理第二行开头残留的分隔符与空白
+    // 监听左下角版本节点，剔除两处 8.8.8 并清理第二行开头残留的分隔符与空白
     (function() {
       const footEl = document.getElementById('app-version');
       if (!footEl) return;
@@ -235,11 +235,11 @@
       const clean = () => {
         if (isUpdating) return;
         const currentHtml = footEl.innerHTML;
-        if (currentHtml.includes('0.7.0')) {
+        if (currentHtml.includes('8.8.8')) {
           isUpdating = true;
           footEl.innerHTML = currentHtml
-            // 剔除两处 0.7.0 版本号
-            .replaceAll('0.7.0', '')
+            // 剔除两处 8.8.8 版本号
+            .replaceAll('8.8.8', '')
             // 清理第一行 IKUN 后面多余的空白或 nbsp
             .replace(/(IKUN)(?:\s|&nbsp;)+/g, '$1 ')
             // 清理第二行开头残留的竖线、斜杠、连字符及周围空白
