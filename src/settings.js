@@ -20,7 +20,7 @@ class Settings {
   }
   async route(host, port) {
     if (!this.value.socksViaSystemProxy) return null;
-    if (!this.resolveSystemProxy) throw new Error('系统代理功能需要使用 CIKE 桌面客户端');
+    if (!this.resolveSystemProxy) throw new Error('系统代理功能需要使用 IKUN 桌面客户端');
     const target = host ? `https://${host.includes(':') ? `[${host}]` : host}:${port}/` : 'https://example.com/';
     return parseSystemProxy(await this.resolveSystemProxy(target));
   }
