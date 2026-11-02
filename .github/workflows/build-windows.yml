@@ -30,7 +30,7 @@ jobs:
 
       # 1. 禁用 electron-builder 内部自动发布，避免与后续步骤产生竞态冲突
       - name: Build and Package Windows Executable
-        run: npx electron-builder --win --x64 -c.publish=never
+        run: npx electron-builder --win --x64 -p never
 
       - name: Get short commit hash
         id: vars
