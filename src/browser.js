@@ -116,7 +116,7 @@ class BrowserManager {
         const scheme = proxyRecord.type === 'socks5' ? 'socks5' : 'http';
         const host = proxyRecord.host.includes(':') ? `[${proxyRecord.host}]` : proxyRecord.host;
         proxyServerArg = `${scheme}://${host}:${proxyRecord.port}`;
-        proxy = { 
+        proxy = {
           server: proxyServerArg,
           ...(proxyRecord.username ? { username: proxyRecord.username } : {}),
           ...(proxyRecord.password ? { password: proxyRecord.password } : {})
@@ -124,8 +124,10 @@ class BrowserManager {
       }
 
       const { options } = buildContextOptions({ ...effective, proxy });
-      const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
       
+      // 默认不开放远程调试端口，杜绝页面通过本地端口反向扫描判定 CDP 通信
+      const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
+
       const extraArgs = [
         '--no-first-run',
         '--no-default-browser-check',
@@ -197,9 +199,35 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // --- 关键注入：修复 WebRTC 异常并规范 brands 属性 ---
+      // --- 关键注入：抹除 CDP 变量、对齐 brands 与保护 WebRTC 接口 ---
       await context.addInitScript(() => {
-        // 1. 保留 RTCPeerConnection 接口，拦截服务器配置以阻断真实打洞，避免 ReferenceError
+        // 1. 消除 CDP 注入特征变量（解决 hasCDP: true 的核心来源）
+        try {
+          const cleanCDP = () => {
+            const keys = Object.keys(window).concat(Object.keys(document));
+            for (const key of keys) {
+              if (key.match(/^cdc_[a-z0-9]/ig)) {
+                delete window[key];
+                delete document[key];
+              }
+            }
+          };
+          cleanCDP();
+          window.addEventListener('DOMContentLoaded', cleanCDP);
+        } catch (_) {}
+
+        // 2. 原生原型链校准（确保 navigator.webdriver 为 false 且在原型上）
+        try {
+          if (navigator.webdriver !== false) {
+            Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+              get: () => false,
+              enumerable: true,
+              configurable: true
+            });
+          }
+        } catch (_) {}
+
+        // 3. 保留 RTCPeerConnection 原生定义，阻断外网打洞，避免抛出 ReferenceError 异常
         try {
           if (typeof window.RTCPeerConnection !== 'undefined') {
             const NativeRTC = window.RTCPeerConnection;
@@ -211,11 +239,11 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 2. 补齐 Google Chrome 专属 Brand，使 brands 结构与 UA 声明一致
+        // 4. 补齐 Google Chrome 专属 Brand，使 brands 结构与 UA 声明一致
         try {
           if (navigator.userAgentData) {
             const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
-            const chromeVersion = chromeMatch ? chromeMatch[1] : '156';
+            const chromeVersion = chromeMatch ? chromeMatch[1] : '130';
             const completeBrands = [
               { brand: 'Not:A-Brand', version: '8' },
               { brand: 'Chromium', version: chromeVersion },
@@ -238,18 +266,7 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 3. 规范化 navigator.webdriver 状态
-        try {
-          if (navigator.webdriver !== false) {
-            Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
-              get: () => false,
-              enumerable: true,
-              configurable: true
-            });
-          }
-        } catch (_) {}
-
-        // 4. 补齐 Chrome 运行时结构
+        // 5. 补齐 Chrome 运行时结构
         if (!window.chrome) {
           window.chrome = {};
         }
