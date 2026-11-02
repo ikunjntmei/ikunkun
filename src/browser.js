@@ -136,6 +136,18 @@ class BrowserManager {
         '--disable-blink-features=AutomationControlled',
         '--exclude-switches=enable-automation',
         '--disable-infobars',
+        // 抹除底层自动化特征与 CDP 标记
+        '--disable-features=IsolateOrigins,site-per-process,AutomationControlled',
+        '--disable-ipc-flooding-protection',
+        '--disable-background-networking',
+        '--disable-client-side-phishing-detection',
+        '--disable-default-apps',
+        '--disable-hang-monitor',
+        '--disable-popup-blocking',
+        '--disable-prompt-on-repost',
+        '--disable-sync',
+        '--password-store=basic',
+        '--use-mock-keychain',
         // 彻底切断 WebRTC 本地网络泄露
         '--enforce-webrtc-ip-permission-check',
         '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -198,35 +210,56 @@ class BrowserManager {
 
       // --- 防自动化与指纹深度擦除注入 ---
       await context.addInitScript(() => {
-        // 1. 原型链原生化：彻底擦除 Navigator 原型上的 webdriver 属性描述符
+        // 1. 原型链级别彻底删除 webdriver 属性描述符
         try {
-          const descriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
-          if (descriptor) {
-            delete Navigator.prototype.webdriver;
-          }
-        } catch (_) {}
-
-        try {
+          delete Navigator.prototype.webdriver;
           delete Object.getPrototypeOf(navigator).webdriver;
         } catch (_) {}
 
-        // 2. 清洗可能由 CDP/测试驱动留下的全局自动化变量 (jungle 识别关键)
-        const cleanAutomationGlobals = () => {
-          const sensitivePatterns = ['cdc_', 'playwright', 'pw_'];
-          for (const key of Object.getOwnPropertyNames(window)) {
-            if (sensitivePatterns.some(p => key.includes(p))) {
-              try { delete window[key]; } catch (_) {}
+        // 2. 伪造 Error 堆栈，抹除 Playwright / CDP / evaluate 异步调用痕迹 (彻底消除 jungle)
+        const originalCaptureStackTrace = Error.captureStackTrace;
+        if (originalCaptureStackTrace) {
+          Error.captureStackTrace = function (targetObject, constructorOpt) {
+            originalCaptureStackTrace.call(this, targetObject, constructorOpt);
+            if (targetObject && typeof targetObject.stack === 'string') {
+              targetObject.stack = targetObject.stack
+                .split('\n')
+                .filter(line => !line.includes('playwright') && !line.includes('__pw_') && !line.includes('evaluate'))
+                .join('\n');
             }
-          }
-          for (const key of Object.getOwnPropertyNames(document)) {
-            if (sensitivePatterns.some(p => key.includes(p))) {
-              try { delete document[key]; } catch (_) {}
-            }
-          }
-        };
-        cleanAutomationGlobals();
+          };
+        }
 
-        // 3. 规范化补齐真实 Chrome 对象
+        // 3. 清理自动化注入残留的全局变量
+        const sensitivePatterns = ['cdc_', 'playwright', 'pw_'];
+        for (const key of Object.getOwnPropertyNames(window)) {
+          if (sensitivePatterns.some(p => key.includes(p))) {
+            try { delete window[key]; } catch (_) {}
+          }
+        }
+        for (const key of Object.getOwnPropertyNames(document)) {
+          if (sensitivePatterns.some(p => key.includes(p))) {
+            try { delete document[key]; } catch (_) {}
+          }
+        }
+
+        // 4. 补齐 Chrome 插件列表（避免 plugins.length === 0 被反爬识别）
+        try {
+          const fakePlugins = [
+            { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+            { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer', description: 'Portable Document Format' }
+          ];
+          Object.defineProperty(navigator, 'plugins', {
+            get: () => fakePlugins,
+            enumerable: true,
+            configurable: true
+          });
+        } catch (_) {}
+
+        // 5. 规范化补齐真实 Chrome 对象
         if (!window.chrome) {
           window.chrome = {};
         }
@@ -241,7 +274,7 @@ class BrowserManager {
           PlatformOs: { WIN: 'win' }
         };
 
-        // 4. 清除 WebRTC 对象避免 UDP 泄露真实物理网络
+        // 6. 清除 WebRTC 对象避免任何直连穿透
         try {
           delete window.RTCPeerConnection;
           delete window.webkitRTCPeerConnection;
@@ -250,7 +283,7 @@ class BrowserManager {
         } catch (_) {}
       });
 
-      // 针对已有页面同样执行擦除
+      // 针对启动初始生成的页面同步执行擦除
       for (const page of context.pages()) {
         await page.evaluate(() => {
           try {
