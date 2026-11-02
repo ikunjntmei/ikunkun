@@ -27,7 +27,8 @@ const { checkProxy } = require('./proxycheck');
 const { Settings } = require('./settings');
 
 const VERSION = require('../package.json').version;
-const DATA_DIR = process.env.LFB_DATA || path.join(os.homedir(), '.local-fingerprint-browser');
+// 默认数据目录更新为 .ikun-browser
+const DATA_DIR = process.env.LFB_DATA || path.join(os.homedir(), '.ikun-browser');
 const PORT_MIN = 4440;
 const PORT_MAX = 4539;
 const DISCOVERY_FILE = 'local_api_url.txt';
@@ -129,7 +130,8 @@ function buildBackend(dataDir = DATA_DIR, options = {}) {
 
   // --- meta ---
   router.get('/getVersion', (ctx) => {
-    ctx.body = { ok: true, version: VERSION, name: 'cike', platform: HOST_PLATFORM, fingerprintMode: 'native', credentialProtection: proxyStore.codec.protection };
+    // 接口返回 name 改为 ikun
+    ctx.body = { ok: true, version: VERSION, name: 'ikun', platform: HOST_PLATFORM, fingerprintMode: 'native', credentialProtection: proxyStore.codec.protection };
   });
 
   router.get('/settings', (ctx) => {
