@@ -5,7 +5,7 @@ const TIMEZONES = ['auto', 'America/New_York', 'America/Chicago', 'America/Denve
   'Europe/London', 'Europe/Berlin', 'Europe/Moscow', 'Asia/Dubai', 'Asia/Shanghai',
   'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney'];
 const TIMEZONE_LABELS = { auto: '代理地区 / 无代理时跟随系统' };
-const VIEWPORTS = ['1440x900', '1366x768', '1536x864', '1920x1080', '1280x800', '2560x1440'];
+const VIEWPORTS = ['1920x1080', '1440x900', '1366x768', '1536x864', '1280x800', '2560x1440'];
 const LOCALES = ['auto', 'zh-CN', 'en-US', 'en-GB', 'de-DE', 'fr-FR', 'ja-JP'];
 
 const selectedProfiles = new Set(), selectedProxies = new Set();
@@ -78,9 +78,9 @@ let newPageInited = false;
 
 function initNewPage() {
   const vpSel = document.getElementById('n-vp');
-if (vpSel && !vpSel.options.length) {
-  vpSel.innerHTML = VIEWPORTS.map((v) => `<option ${v === '1920x1080' ? 'selected' : ''}>${v}</option>`).join('');
-}
+  if (vpSel && !vpSel.options.length) {
+    vpSel.innerHTML = VIEWPORTS.map((v) => `<option ${v === '1920x1080' ? 'selected' : ''}>${v}</option>`).join('');
+  }
   const locSel = document.getElementById('n-locale');
   if (locSel && !locSel.options.length) {
     locSel.innerHTML = LOCALES.map((l) => `<option value="${l}" ${l === 'auto' ? 'selected' : ''}>${l === 'auto' ? TIMEZONE_LABELS.auto : l}</option>`).join('');
@@ -175,7 +175,7 @@ async function saveNewProfile(openAfter = false) {
     }
   }
 
-  const [vw, vh] = (document.getElementById('n-vp')?.value || '1440x900').split('x').map(Number);
+  const [vw, vh] = (document.getElementById('n-vp')?.value || '1920x1080').split('x').map(Number);
   const spec = {
     group: document.getElementById('n-group')?.value.trim() || '',
     fingerprintMode: 'native',
@@ -853,6 +853,14 @@ async function startChromiumDownload() {
 document.querySelectorAll('.menu-item').forEach((b) => b.onclick = () => showPage(b.dataset.page));
 const btnRefreshProfiles = document.getElementById('btn-refresh-profiles');
 if (btnRefreshProfiles) btnRefreshProfiles.onclick = loadProfiles;
+
+// 绑定侧边栏“最小化到托盘”点击事件
+const btnMinTray = document.getElementById('btn-minimize-tray');
+if (btnMinTray) {
+  btnMinTray.onclick = () => {
+    window.lfb?.minimizeToTray();
+  };
+}
 
 const profileSearch = document.getElementById('profile-search');
 if (profileSearch) profileSearch.oninput = () => { state.profilePage = 0; renderProfiles(); };
