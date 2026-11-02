@@ -1,6 +1,6 @@
 {
   "name": "ikun",
-  "version": "0.7.0",
+  "version": "",
   "description": "Local multi-profile fingerprint browser with a local automation API. Clean-room implementation for learning/research. No vendor backend required.",
   "main": "electron/main.js",
   "type": "commonjs",
