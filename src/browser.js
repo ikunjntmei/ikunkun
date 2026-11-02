@@ -117,6 +117,8 @@ class BrowserManager {
       const launchOptions = {
         ...options,
         headless,
+        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
+        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
         chromiumSandbox: true,
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
@@ -130,7 +132,7 @@ class BrowserManager {
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
-          ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
+          ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
@@ -157,8 +159,8 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 仅保留原生属性规范，避免过度注入导致反爬触发 (jungle)
-      await context.addInitScript(() => {
+      // 规范化 webdriver 并同步 navigator.languages，杜绝检测站抓到语言环境不一致
+      await context.addInitScript((loc) => {
         try {
           if (navigator.webdriver !== false) {
             Object.defineProperty(navigator, 'webdriver', {
@@ -166,8 +168,20 @@ class BrowserManager {
               configurable: true
             });
           }
+          if (loc && loc !== 'auto') {
+            const shortLoc = loc.split('-')[0];
+            const languagesList = Array.from(new Set([loc, shortLoc, 'en-US', 'en']));
+            Object.defineProperty(navigator, 'language', {
+              get: () => loc,
+              configurable: true
+            });
+            Object.defineProperty(navigator, 'languages', {
+              get: () => languagesList,
+              configurable: true
+            });
+          }
         } catch (_) {}
-      });
+      }, effective.locale);
 
       await configureDownloads(context);
       checkCancelled();
