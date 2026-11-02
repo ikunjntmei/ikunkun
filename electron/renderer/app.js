@@ -78,9 +78,9 @@ let newPageInited = false;
 
 function initNewPage() {
   const vpSel = document.getElementById('n-vp');
-  if (vpSel && !vpSel.options.length) {
-    vpSel.innerHTML = VIEWPORTS.map((v) => `<option>${v}</option>`).join('');
-  }
+if (vpSel && !vpSel.options.length) {
+  vpSel.innerHTML = VIEWPORTS.map((v) => `<option ${v === '1920x1080' ? 'selected' : ''}>${v}</option>`).join('');
+}
   const locSel = document.getElementById('n-locale');
   if (locSel && !locSel.options.length) {
     locSel.innerHTML = LOCALES.map((l) => `<option value="${l}" ${l === 'auto' ? 'selected' : ''}>${l === 'auto' ? TIMEZONE_LABELS.auto : l}</option>`).join('');
