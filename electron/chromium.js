@@ -104,7 +104,6 @@ async function downloadFile(url, dest, onProgress, redirects = 0) {
     if (done > 1024 * 1024 * 1024) response.destroy(new Error('内核安装包异常过大'));
     onProgress?.({ done, total, pct: total ? Math.round(done / total * 100) : 0 });
   });
-  // 修复点 1：使用 'w' 覆写模式，防止 Windows 下二次下载时抛出 EEXIST
   await pipeline(response, fs.createWriteStream(dest, { flags: 'w' }));
 }
 
@@ -124,7 +123,6 @@ function findExecutable(root) {
   return null;
 }
 
-// 辅助等待函数，用于避开 Windows 下子进程退出后的短暂文件锁
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function install(dir, onProgress) {
@@ -164,7 +162,6 @@ async function install(dir, onProgress) {
       if (process.platform !== 'win32') throw err;
     }
 
-    // 修复点 2：在 Windows 下给文件句柄释放留出 300ms 缓冲，防止 EPERM / EBUSY
     if (process.platform === 'win32') {
       await sleep(300);
     }
@@ -173,7 +170,6 @@ async function install(dir, onProgress) {
     const destination = path.join(browserRoot(dir), `${chromiumEntry().browserVersion}-${suffix}`);
     const relative = path.relative(staging, executable);
 
-    // 带重试机制的重命名
     for (let i = 0; i < 5; i++) {
       try {
         fs.renameSync(staging, destination);
@@ -191,7 +187,6 @@ async function install(dir, onProgress) {
     return final;
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
-    // 只有在重命名未成功时才需要清理 staging
     if (!renameSuccess) {
       fs.rmSync(staging, { recursive: true, force: true });
     }
