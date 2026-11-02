@@ -24,7 +24,9 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
+          npm install --no-audit
 
       - name: Build and Package Windows Executable
         run: npx electron-builder --win --x64
