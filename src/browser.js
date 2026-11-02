@@ -132,11 +132,9 @@ class BrowserManager {
         '--check-for-update-interval=31536000',
         '--disable-component-update',
         '--disable-background-mode',
-        // 内核级核心：禁用自动化控制特性，还原原生的 navigator.webdriver = false
         '--disable-blink-features=AutomationControlled',
         '--exclude-switches=enable-automation',
         '--disable-infobars',
-        // 切断 WebRTC 物理网络直连
         '--enforce-webrtc-ip-permission-check',
         '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
       ];
@@ -150,7 +148,6 @@ class BrowserManager {
         proxy: proxy || undefined,
         headless,
         chromiumSandbox: true,
-        // 确保 Playwright 不传入自动化和测试参数
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
           ...extraArgs,
@@ -197,9 +194,27 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // --- 极简原生注入：移除所有破坏原生特性的 Hook 代码 ---
+      // --- 运行时注入补齐与反检测 ---
       await context.addInitScript(() => {
-        // 1. 保险检查：如果内核层未生效，才以完全模拟原生的方式修正 webdriver（保留在原型链上，返回 false）
+        // 1. 补齐 Google Chrome 专属 Brand，对齐 navigator.userAgentData 与 UA 声明
+        if (navigator.userAgentData) {
+          try {
+            const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
+            const chromeVersion = chromeMatch ? chromeMatch[1] : '130';
+            const completeBrands = [
+              { brand: 'Not:A-Brand', version: '8' },
+              { brand: 'Chromium', version: chromeVersion },
+              { brand: 'Google Chrome', version: chromeVersion }
+            ];
+            Object.defineProperty(navigator.userAgentData, 'brands', {
+              get: () => completeBrands,
+              configurable: true,
+              enumerable: true
+            });
+          } catch (_) {}
+        }
+
+        // 2. 维持原生的 navigator.webdriver = false
         try {
           if (navigator.webdriver !== false) {
             Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
@@ -210,7 +225,7 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 2. 补齐 window.chrome 原生对象结构（避免破坏原型链）
+        // 3. 补齐真实 Chrome 对象结构
         if (!window.chrome) {
           window.chrome = {};
         }
@@ -222,7 +237,7 @@ class BrowserManager {
           };
         }
 
-        // 3. 封锁 WebRTC 原生对象，确保无任何泄漏
+        // 4. 清理 WebRTC 对象避免任何直连穿透
         try {
           delete window.RTCPeerConnection;
           delete window.webkitRTCPeerConnection;
