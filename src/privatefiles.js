@@ -79,7 +79,8 @@ function credentials(provider) {
       if (!value) return '';
       if (typeof value === 'string') return value;
       if (value.format !== 'safe-storage-v1' || typeof value.data !== 'string') throw new Error('凭据格式无效');
-      if (!provider) throw new Error('此数据包含钥匙串保护的凭据，请使用 CIKE 桌面版打开');
+      // 提示文案修改为 IKUN 桌面版
+      if (!provider) throw new Error('此数据包含钥匙串保护的凭据，请使用 IKUN 桌面版打开');
       return provider.decrypt(value.data);
     },
   };
