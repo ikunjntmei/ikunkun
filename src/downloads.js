@@ -3,9 +3,9 @@ const fs = require('fs/promises');
 const path = require('path');
 const os = require('os');
 
-// Set native preferences before launching the profile. Chromium's native
-// download manager preserves filenames, numbers collisions and records the
-// permanent path in chrome://downloads. CDP's `allow` policy overwrites names.
+// 在启动前直接写入 Chromium 原生首选项。
+// Chromium 的原生下载管理器会读取 Default/Preferences 中的配置，
+// 保留文件名并自动处理重命名，无需依赖 CDP 协议干预。
 async function prepareDownloads(profileDirectory, directory = path.join(os.homedir(), 'Downloads')) {
   directory = path.resolve(directory);
   await fs.mkdir(directory, { recursive: true });
@@ -13,8 +13,12 @@ async function prepareDownloads(profileDirectory, directory = path.join(os.homed
   await fs.mkdir(defaultDirectory, { recursive: true });
   const filename = path.join(defaultDirectory, 'Preferences');
   let preferences = {};
-  try { preferences = JSON.parse(await fs.readFile(filename, 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try {
+    preferences = JSON.parse(await fs.readFile(filename, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
   preferences.background_mode = { ...preferences.background_mode, enabled: false };
   preferences.profile = { ...preferences.profile, name: path.basename(profileDirectory), exit_type: 'Normal' };
   preferences.session = { ...preferences.session, restore_on_startup: 5 };
@@ -24,6 +28,7 @@ async function prepareDownloads(profileDirectory, directory = path.join(os.homed
     prompt_for_download: false,
     directory_upgrade: true,
   };
+
   const temporary = filename + '.cike-downloads';
   try {
     await fs.writeFile(temporary, JSON.stringify(preferences), { mode: 0o600 });
@@ -33,16 +38,10 @@ async function prepareDownloads(profileDirectory, directory = path.join(os.homed
   }
 }
 
+// 移除 newCDPSession(page)，彻底杜绝因挂载调试会话导致的 hasCDP: true 泄漏
 async function configureDownloads(context) {
-  const page = context.pages()[0] || await context.newPage();
-  const session = await context.newCDPSession(page);
-  try {
-    // Undo Playwright's allowAndName policy, which stores GUID-named artifacts
-    // in a temporary directory. Native defaults apply to all tabs and popups.
-    await session.send('Browser.setDownloadBehavior', { behavior: 'default' });
-  } finally {
-    await session.detach();
-  }
+  // 原生配置已由 prepareDownloads 固化到 Preferences 文件中，保持静默即可
+  return;
 }
 
 module.exports = { prepareDownloads, configureDownloads };
