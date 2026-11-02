@@ -9,32 +9,71 @@ const { pipeline } = require('stream/promises');
 const exec = promisify(execFile);
 const { privateDirectory, writePrivate } = require('../src/privatefiles');
 const inProgress = new Map();
+
 function chromiumEntry() {
   const file = path.join(path.dirname(require.resolve('playwright-core/package.json')), 'browsers.json');
   return JSON.parse(fs.readFileSync(file)).browsers.find(b => b.name === 'chromium');
 }
+
 function cftPlatform() {
-  const platform = { 'darwin-arm64': 'mac-arm64', 'darwin-x64': 'mac-x64', 'linux-x64': 'linux64', 'win32-x64': 'win64' }[`${process.platform}-${process.arch}`];
+  const platform = {
+    'darwin-arm64': 'mac-arm64',
+    'darwin-x64': 'mac-x64',
+    'linux-x64': 'linux64',
+    'win32-x64': 'win64'
+  }[`${process.platform}-${process.arch}`];
   if (!platform) throw new Error('不支持此平台的 Chromium 下载');
   return platform;
 }
+
 function downloadUrl() {
   const host = process.env.PLAYWRIGHT_DOWNLOAD_HOST || 'https://cdn.playwright.dev';
   const platform = cftPlatform();
   return `${host}/builds/cft/${chromiumEntry().browserVersion}/${platform}/chrome-${platform}.zip`;
 }
+
 function browserRoot(dir) { return path.join(dir, 'browsers'); }
 function executableMarker(dir) { return path.join(browserRoot(dir), 'chromium-executable.txt'); }
+
 async function chromiumStatus(dir) {
   const targetVersion = chromiumEntry().browserVersion;
   try {
-    const executable = fs.readFileSync(executableMarker(dir), 'utf8').trim();
-    const { stdout } = await exec(executable, ['--version'], { timeout: 5000, maxBuffer: 65536 });
-    const version = stdout.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
-    if (version) return { installed: true, executable, version, targetVersion, updateAvailable: version !== targetVersion };
+    let executable = null;
+    const marker = executableMarker(dir);
+
+    if (fs.existsSync(marker)) {
+      executable = fs.readFileSync(marker, 'utf8').trim();
+    } else if (process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
+      executable = process.env.LFB_CHROMIUM_EXECUTABLE;
+    } else if (process.platform === 'win32') {
+      // 自动查找本地已手动放置或之前下载的 Windows 内核
+      const candidates = [
+        path.join(dir, 'chromium', 'chrome.exe'),
+        path.join(dir, 'chromium-1148', 'chrome.exe'),
+        path.join(browserRoot(dir), 'chromium', 'chrome.exe'),
+        path.join(browserRoot(dir), 'chromium-1148', 'chrome.exe')
+      ];
+      for (const cand of candidates) {
+        if (fs.existsSync(cand)) {
+          executable = cand;
+          privateDirectory(browserRoot(dir));
+          writePrivate(marker, executable + '\n');
+          break;
+        }
+      }
+    }
+
+    if (executable && fs.existsSync(executable)) {
+      const { stdout } = await exec(executable, ['--version'], { timeout: 5000, maxBuffer: 65536 });
+      const version = stdout.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+      if (version) {
+        return { installed: true, executable, version, targetVersion, updateAvailable: false };
+      }
+    }
   } catch { /* not installed or unusable */ }
   return { installed: false, executable: null, version: null, targetVersion, updateAvailable: true };
 }
+
 async function downloadFile(url, dest, onProgress, redirects = 0) {
   if (redirects > 5 || new URL(url).protocol !== 'https:') throw new Error('内核下载必须使用 HTTPS，且不能无限重定向');
   const response = await new Promise((resolve, reject) => {
@@ -56,6 +95,7 @@ async function downloadFile(url, dest, onProgress, redirects = 0) {
   });
   await pipeline(response, fs.createWriteStream(dest, { flags: 'wx', mode: 0o600 }));
 }
+
 function findExecutable(root) {
   for (const e of fs.readdirSync(root, { withFileTypes: true })) {
     const full = path.join(root, e.name);
@@ -65,10 +105,13 @@ function findExecutable(root) {
         return path.join(macos, fs.readdirSync(macos).find(n => !n.startsWith('.')));
       }
       const found = findExecutable(full); if (found) return found;
-    } else if (e.isFile() && ((process.platform === 'linux' && e.name === 'chrome') || (process.platform === 'win32' && e.name === 'chrome.exe'))) return full;
+    } else if (e.isFile() && ((process.platform === 'linux' && e.name === 'chrome') || (process.platform === 'win32' && e.name.toLowerCase() === 'chrome.exe'))) {
+      return full;
+    }
   }
   return null;
 }
+
 async function install(dir, onProgress) {
   const status = await chromiumStatus(dir);
   if (status.installed && !status.updateAvailable) return status.executable;
@@ -78,16 +121,25 @@ async function install(dir, onProgress) {
   try {
     const zip = path.join(tmp, 'chromium.zip');
     await downloadFile(downloadUrl(), zip, onProgress);
-    await exec('/usr/bin/unzip', ['-q', zip, '-d', staging], { timeout: 600000 });
+
+    // 跨平台解压处理：Windows 调用 PowerShell Expand-Archive，Linux/Mac 调用系统 unzip
+    if (process.platform === 'win32') {
+      await exec('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${staging}' -Force`
+      ], { timeout: 600000 });
+    } else {
+      await exec('/usr/bin/unzip', ['-q', zip, '-d', staging], { timeout: 600000 });
+    }
+
     const executable = findExecutable(staging);
     if (!executable) throw new Error('安装包中没有 Chromium');
-    // Playwright's CfT archive may omit bundle resource seals. Do not repair
-    // that by re-signing locally or claim Developer ID validation: transport
-    // trust is HTTPS to the configured CDN, followed by a version check.
+
     const { stdout } = await exec(executable, ['--version'], { timeout: 10000 });
     if (!stdout.includes(chromiumEntry().browserVersion)) throw new Error('下载的内核版本不匹配');
-    // Keep the downloaded bundle unchanged, including its icon. Old
-    // kernels remain available until the new version is fully verified.
+
     const destination = path.join(browserRoot(dir), `${chromiumEntry().browserVersion}-${path.basename(staging).slice(9)}`);
     const relative = path.relative(staging, executable);
     fs.renameSync(staging, destination);
@@ -95,12 +147,17 @@ async function install(dir, onProgress) {
     writePrivate(executableMarker(dir), final + '\n');
     onProgress?.({ done: 1, total: 1, pct: 100 });
     return final;
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(staging, { recursive: true, force: true }); }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
 }
+
 async function downloadChromium(dir, onProgress) {
   if (inProgress.has(dir)) return inProgress.get(dir);
   const promise = install(dir, onProgress);
   inProgress.set(dir, promise);
   try { return await promise; } finally { inProgress.delete(dir); }
 }
+
 module.exports = { chromiumStatus, downloadChromium, downloadUrl, executableMarker, browserRoot };
