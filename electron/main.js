@@ -4,7 +4,7 @@
  * Main process starts the local backend (Koa API + profile/browser manager)
  * and hosts the management UI, which talks to the same Local API over HTTP.
  */
-const { app, BrowserWindow, Menu, ipcMain, shell, session, safeStorage, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, shell, session, safeStorage, dialog, clipboard } = require('electron');
 const { pathToFileURL } = require('url');
 const path = require('path');
 const fs = require('fs');
@@ -15,12 +15,19 @@ const { checkUpdate, installUpdate } = require('./updater');
 
 let backend = null;
 let mainWindow = null;
+let tray = null;
+
 const uiFile = path.join(__dirname, 'renderer', 'index.html');
 const uiURL = pathToFileURL(uiFile).href;
 
 if (process.env.LFB_DATA) app.setPath('userData', path.join(DATA_DIR, 'desktop'));
 if (!app.requestSingleInstanceLock()) app.exit(0);
-app.on('second-instance', () => { if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); } });
+app.on('second-instance', () => { 
+  if (mainWindow && !mainWindow.isDestroyed()) { 
+    mainWindow.show(); 
+    mainWindow.focus(); 
+  } 
+});
 
 function trusted(event) {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || event.senderFrame.url !== uiURL) {
@@ -67,6 +74,69 @@ function applyChromiumEnv() {
   } catch { /* not downloaded yet */ }
 }
 
+// 创建系统右下角托盘
+function initTray(iconPath) {
+  if (tray) return;
+  const finalIcon = fs.existsSync(iconPath) ? iconPath : undefined;
+  if (!finalIcon) return;
+
+  tray = new Tray(finalIcon);
+  tray.setToolTip('CIKE 环境管理');
+
+  const trayMenu = Menu.buildFromTemplate([
+    {
+      label: '显示主界面',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '退出软件',
+      click: () => {
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setContextMenu(trayMenu);
+
+  // 单击托盘图标切换显示/隐藏
+  tray.on('click', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible()) {
+      mainWindow.hide();
+    } else {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
+// 设置自定义顶层菜单：左上角仅保留「菜单」->「最小化到托盘」
+function setupAppMenu() {
+  const template = [
+    {
+      label: '菜单',
+      submenu: [
+        {
+          label: '最小化到托盘',
+          accelerator: 'CmdOrCtrl+M',
+          click: () => {
+            if (mainWindow) mainWindow.hide();
+          }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
 async function createWindow() {
   const iconPath = path.join(__dirname, 'assets', 'icon.png');
 
@@ -76,7 +146,6 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'CIKE',
-    autoHideMenuBar: true, // 隐藏原生菜单栏，彻底移除顶栏空白
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -86,6 +155,8 @@ async function createWindow() {
     },
   });
 
+  // 不拦截 close 事件：点击红叉 X 时执行原生关闭流程
+
   mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== uiURL) event.preventDefault(); });
   mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -93,13 +164,15 @@ async function createWindow() {
     return { action: 'deny' };
   });
   await mainWindow.loadFile(uiFile);
+
+  // 初始化右下角托盘
+  initTray(iconPath);
 }
 
 app.whenReady().then(async () => {
-  // 全局移除默认的英文 Application Menu（File/Edit/View/Window）
-  Menu.setApplicationMenu(null);
-
+  setupAppMenu();
   applyChromiumEnv();
+
   try {
     const requireSafeStorage = () => {
       if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储不可用，无法安全读取或迁移代理凭据');
@@ -125,7 +198,9 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { 
+  if (process.platform !== 'darwin') app.quit(); 
+});
 
 let quitting = false;
 app.on('before-quit', event => {
@@ -133,12 +208,13 @@ app.on('before-quit', event => {
   event.preventDefault();
   quitting = true;
 
-  // 设置 3 秒安全退出兜底，防止有未退出的环境导致应用托盘残留
+  // 3 秒安全退出兜底
   const timer = setTimeout(() => { app.exit(0); }, 3000);
 
   backend.browsers.closeAll().finally(() => {
     clearTimeout(timer);
     backend.server?.close?.();
+    if (tray) tray.destroy();
     app.quit();
   });
 });
