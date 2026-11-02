@@ -30,7 +30,8 @@ function buildContextOptions(profile) {
     viewport: profile.viewport,
     deviceScaleFactor: profile.deviceScaleFactor,
     colorScheme: profile.colorScheme,
-    acceptDownloads: true,
+    // 关闭 Playwright 底层自动接管下载管道，防止其自动触发 CDP 会话
+    acceptDownloads: false,
     ignoreHTTPSErrors: false,
     bypassCSP: false,
   };
