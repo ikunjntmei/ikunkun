@@ -1,14 +1,25 @@
 'use strict';
-const path = require('path');
-const fs = require('fs');
-const { spawn } = require('child_process');
+const net = require('net');
 const { chromium } = require('playwright');
-const { webrtcArgs, validateProfile } = require('./fingerprint');
+const { buildContextOptions, webrtcArgs, validateProfile } = require('./fingerprint');
 const { resolveProxy, inlineRecord } = require('./proxyconfig');
 const { ProxyStore } = require('./proxystore');
 const { checkProxy } = require('./proxycheck');
 const { privateDirectory } = require('./privatefiles');
-const { prepareDownloads } = require('./downloads');
+const { prepareDownloads, configureDownloads } = require('./downloads');
+
+function findFreePort(min, max) {
+  return new Promise((resolve, reject) => {
+    let port = min;
+    const next = () => {
+      if (port > max) return reject(new Error('no free debug port'));
+      const s = net.createServer();
+      s.once('error', () => { port++; next(); });
+      s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
+    };
+    next();
+  });
+}
 
 class BrowserManager {
   constructor(store, proxyStore = null, settings = null, options = {}) {
@@ -22,16 +33,16 @@ class BrowserManager {
     this.closing = new Map();
     this.cancelled = new Set();
     this.startPage = options.startPage !== false;
+    this.profileIcons = options.profileIcons !== false;
   }
 
-  isOpen(id) {
-    return this.sessions.has(id) || this.opening.has(id);
-  }
+  isOpen(id) { return this.sessions.has(id) || this.opening.has(id); }
 
   listOpen() {
     return [...this.sessions].map(([id, s]) => ({
       profile_id: id,
-      pid: s.pid,
+      ...(s.debugPort ? { debug_url: `http://127.0.0.1:${s.debugPort}` } : {}),
+      headless: s.headless,
       opened_at: new Date(s.openedAt).toISOString(),
       network: s.network
     }));
@@ -43,25 +54,17 @@ class BrowserManager {
     this.cancelled.delete(id);
     const pending = this._open(id, options);
     this.opening.set(id, pending);
-    try {
-      return await pending;
-    } finally {
-      this.opening.delete(id);
-    }
+    try { return await pending; } finally { this.opening.delete(id); }
   }
 
-  async _open(id) {
-    if (this.sessions.has(id)) {
-      return { profile_id: id, open: true, reused: true, ...this.listOpen().find(s => s.profile_id === id) };
-    }
+  async _open(id, { headless = false } = {}) {
+    if (typeof headless !== 'boolean') throw Object.assign(new Error('headless 必须为布尔值'), { status: 400 });
+    if (this.sessions.has(id)) return { profile_id: id, open: true, reused: true, ...this.listOpen().find(s => s.profile_id === id) };
     const profile = this.store.get(id);
     if (!profile) throw Object.assign(new Error('环境不存在'), { status: 404 });
     validateProfile(profile);
 
-    const checkCancelled = () => {
-      if (this.cancelled.has(id)) throw Object.assign(new Error('环境启动已取消'), { status: 409 });
-    };
-
+    const checkCancelled = () => { if (this.cancelled.has(id)) throw Object.assign(new Error('环境启动已取消'), { status: 409 }); };
     let proxyRecord = resolveProxy(profile, this.proxyStore);
     const useSystemProxy = this.settings?.get().socksViaSystemProxy === true;
     if (!proxyRecord && useSystemProxy) {
@@ -83,7 +86,7 @@ class BrowserManager {
       if (profile.proxyId) this.proxyStore.setCheckResult(profile.proxyId, result);
       if (result.status !== 'ok') throw Object.assign(new Error(result.error || '代理连接失败，已阻止启动'), { status: 502 });
       if (profile.timezone === 'auto') {
-        if (!result.timezone) throw Object.assign(new Error('代理出口时区未知，请重新检测或手动选择时区'), { status: 409 });
+        if (!result.timezone) throw Object.assign(new Error('代理出口时区未知，请重新检测或手动选择时区；不会回退到本机时区'), { status: 409 });
         effective.timezone = result.timezone;
       }
       if (profile.locale === 'auto') {
@@ -95,133 +98,155 @@ class BrowserManager {
       network = { route: 'proxy', exitIp: result.exitIp, checkedAt: new Date().toISOString(), timezone: effective.timezone, locale: effective.locale };
     }
 
-    let forwarder = null;
-    let proxyServerArg = null;
+    let proxy = proxyRecord ? ProxyStore.toPlaywright(proxyRecord) : null;
+    let forwarder, context;
 
     try {
       if (proxyRecord?.type === 'socks5' && (proxyRecord.username || proxyRecord.password || useSystemProxy)) {
         const { SocksForwarder } = require('./socksfwd');
         const systemProxy = useSystemProxy ? await this.settings.route(proxyRecord.host, proxyRecord.port) : null;
         forwarder = await SocksForwarder.start({ ...proxyRecord, systemProxy });
-        proxyServerArg = `http://127.0.0.1:${forwarder.port}`;
-      } else if (proxyRecord) {
-        const scheme = proxyRecord.type === 'socks5' ? 'socks5' : 'http';
-        const host = proxyRecord.host.includes(':') ? `[${proxyRecord.host}]` : proxyRecord.host;
-        proxyServerArg = `${scheme}://${host}:${proxyRecord.port}`;
+        proxy = { server: `http://127.0.0.1:${forwarder.port}`, bypass: '<-loopback>' };
+      } else if (proxy) {
+        proxy.bypass = '<-loopback>';
       }
 
-      // 获取内置独立 Chromium 执行路径
-      const isolatedCandidates = [
-        process.env.LFB_CHROMIUM_EXECUTABLE,
-        path.join(this.store.dataDir, 'chromium', 'chrome.exe'),
-        path.join(this.store.dataDir, 'chromium-1148', 'chrome.exe'),
-        path.join(this.store.dataDir, 'browsers', 'chromium', 'chrome.exe'),
-        path.join(this.store.dataDir, 'browsers', 'chromium-1148', 'chrome.exe')
-      ];
+      const { options } = buildContextOptions({ ...effective, proxy });
+      const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      let executablePath = null;
-      for (const candidate of isolatedCandidates) {
-        if (candidate && fs.existsSync(candidate)) {
-          executablePath = candidate;
-          break;
-        }
+      const launchOptions = {
+        ...options,
+        headless,
+        chromiumSandbox: true,
+        // 关键改动 1：彻底过滤自动化与测试环境标记
+        ignoreDefaultArgs: ['--enable-automation', '--test-type'],
+        args: [
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--site-per-process',
+          '--disable-background-mode',
+          '--disable-blink-features=AutomationControlled',
+          '--exclude-switches=enable-automation',
+          '--disable-infobars',
+          '--enforce-webrtc-ip-permission-check',
+          '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+          ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
+          ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
+          ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
+        ],
+      };
+
+      if (process.env.LFB_CHROMIUM_EXECUTABLE) {
+        launchOptions.executablePath = process.env.LFB_CHROMIUM_EXECUTABLE;
       }
 
-      if (!executablePath) {
-        try {
-          executablePath = chromium.executablePath();
-        } catch (_) {}
+      checkCancelled();
+
+      if (!headless && this.profileIcons) {
+        launchOptions.executablePath = await require('./profileapp').ensureProfileApp(
+          this.store.dataDir,
+          profile,
+          launchOptions.executablePath || chromium.executablePath()
+        );
+        checkCancelled();
       }
 
-      if (!executablePath || !fs.existsSync(executablePath)) {
-        throw new Error('未检测到可用的独立 Chromium 内核，请确认依赖完整');
-      }
-
-      const directory = path.resolve(this.store.profileDir(id));
+      const directory = this.store.profileDir(id);
       privateDirectory(directory);
       await prepareDownloads(directory, this.downloadsDirectory);
 
-      const targetUrl = 'https://iphey.com';
+      context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 关键启动参数：强制激活前台独立渲染视窗，避免无界面挂起
-      const chromeArgs = [
-        `--user-data-dir=${directory}`,
-        '--new-window',
-        '--window-position=120,80',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-component-update',
-        '--disable-blink-features=AutomationControlled',
-        '--exclude-switches=enable-automation',
-        '--disable-infobars',
-        '--enforce-webrtc-ip-permission-check',
-        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-        ...(proxyServerArg ? [`--proxy-server=${proxyServerArg}`] : []),
-        ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
-        ...webrtcArgs({ ...effective, proxy: proxyRecord || useSystemProxy || profile.webrtc === 'auto' }),
-        targetUrl
-      ];
+      // 关键改动 2：轻量级、无原型污染的原生特征对齐
+      await context.addInitScript(() => {
+        // 抹除自动化驱动标记
+        try {
+          if (navigator.webdriver !== false) {
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => false,
+              configurable: true
+            });
+          }
+        } catch (_) {}
 
-      const width = effective.viewport?.width || 1280;
-      const height = effective.viewport?.height || 800;
-      chromeArgs.push(`--window-size=${width},${height}`);
+        // 补齐 Chrome 专属 brands，避免 Chromium 双项特征暴露
+        try {
+          if (navigator.userAgentData) {
+            const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
+            const ver = chromeMatch ? chromeMatch[1] : '130';
+            const brands = [
+              { brand: 'Not:A-Brand', version: '8' },
+              { brand: 'Chromium', version: ver },
+              { brand: 'Google Chrome', version: ver }
+            ];
+            Object.defineProperty(navigator.userAgentData, 'brands', {
+              get: () => brands,
+              configurable: true
+            });
+          }
+        } catch (_) {}
 
+        // 确保 WebRTC 接口存在且不出错
+        try {
+          if (typeof window.RTCPeerConnection !== 'undefined') {
+            const NativeRTC = window.RTCPeerConnection;
+            window.RTCPeerConnection = function (config, constraints) {
+              const safeConfig = config ? { ...config, iceServers: [] } : { iceServers: [] };
+              return new NativeRTC(safeConfig, constraints);
+            };
+            window.RTCPeerConnection.prototype = NativeRTC.prototype;
+          }
+        } catch (_) {}
+
+        // 拦截反爬探针利用 console.debug 触发 CDP 序列化探测
+        try {
+          const originalDebug = console.debug;
+          console.debug = function (...args) {
+            return originalDebug.apply(console, args);
+          };
+        } catch (_) {}
+      });
+
+      await configureDownloads(context);
       checkCancelled();
 
-      const spawnEnv = { ...process.env };
-      if (effective.timezone && effective.timezone !== 'auto') {
-        spawnEnv.TZ = effective.timezone;
-      }
-
-      // 拉起独立渲染窗口，明确输出管道以便排查崩溃
-      const child = spawn(executablePath, chromeArgs, {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
-        env: spawnEnv
-      });
-
-      child.unref();
-
-      // 启动验证：若进程瞬间退出（例如参数致命错误），则判定启动失败
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => resolve(), 600);
-        child.once('exit', (code) => {
-          clearTimeout(timer);
-          reject(new Error(`Chromium 启动后异常退出 (退出代码: ${code})`));
-        });
-        child.once('error', (err) => {
-          clearTimeout(timer);
-          reject(new Error(`无法启动 Chromium 进程: ${err.message}`));
-        });
-      });
-
-      const session = {
-        process: child,
-        pid: child.pid,
-        openedAt: Date.now(),
-        forwarder,
-        network
-      };
+      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
       this.sessions.set(id, session);
 
-      child.on('exit', () => {
-        if (this.sessions.get(id) === session) {
-          this.sessions.delete(id);
-        }
+      context.on('close', () => {
+        if (this.sessions.get(id) === session) this.sessions.delete(id);
         forwarder?.stop().catch(() => {});
       });
 
+      const watchPage = page => page.on('close', () => {
+        if (!context.pages().some(p => !p.isClosed()) && this.sessions.get(id) === session) {
+          this.close(id).catch(() => {});
+        }
+      });
+
+      context.on('page', watchPage);
+      for (const page of context.pages()) watchPage(page);
+
+      if (!headless && this.startPage) {
+        await require('./startpage').openStartPage(context, profile, network, ip => {
+          if (this.sessions.get(id) !== session) return;
+          session.network = { ...session.network, exitIp: ip, checkedAt: new Date().toISOString() };
+          this.store.recordNetwork(id, session.network);
+        });
+      }
+
       checkCancelled();
       this.store.recordOpened(id, session.network);
-
       return {
         profile_id: id,
         open: true,
         reused: false,
-        network
+        headless,
+        network,
+        ...(debugPort ? { debug_url: `http://127.0.0.1:${debugPort}` } : {})
       };
     } catch (error) {
+      await context?.close().catch(() => {});
       await forwarder?.stop().catch(() => {});
       throw error;
     }
@@ -230,33 +255,18 @@ class BrowserManager {
   async close(id) {
     if (this.closing.has(id)) return this.closing.get(id);
     this.cancelled.add(id);
-
     const pending = (async () => {
       await this.opening.get(id)?.catch(() => {});
       const session = this.sessions.get(id);
       if (session) {
-        if (session.pid) {
-          try {
-            if (process.platform === 'win32') {
-              spawn('taskkill', ['/pid', String(session.pid), '/f', '/t']);
-            } else {
-              process.kill(session.pid);
-            }
-          } catch (_) {}
-        }
-        await session.forwarder?.stop().catch(() => {});
+        await session.context.close();
+        await session.forwarder?.stop();
         if (this.sessions.get(id) === session) this.sessions.delete(id);
       }
       return { profile_id: id, open: false };
     })();
-
     this.closing.set(id, pending);
-    try {
-      return await pending;
-    } finally {
-      this.closing.delete(id);
-      this.cancelled.delete(id);
-    }
+    try { return await pending; } finally { this.closing.delete(id); this.cancelled.delete(id); }
   }
 
   async closeAll() {
@@ -265,9 +275,7 @@ class BrowserManager {
     return { closed: ids.length };
   }
 
-  getContext() {
-    return null;
-  }
+  getContext(id) { return this.sessions.get(id)?.context || null; }
 }
 
 module.exports = { BrowserManager };
