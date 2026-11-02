@@ -853,7 +853,7 @@ document.getElementById('btn-open-data').onclick = () => window.lfb.openDataDir(
     state.chromium = await window.lfb.chromiumStatus();
   } catch { state.chromium = { installed: false }; }
   updateBanner();
-  try { const { version } = await api('/api/getVersion'); document.getElementById('app-version').textContent = `v${version} · 本地运行`; } catch {}
+  // try { const { version } = await api('/api/getVersion'); document.getElementById('app-version').textContent = `v${version} · 本地运行`; } catch {}
   await loadProfiles();
   await loadProxies();
   showPage('profiles');
