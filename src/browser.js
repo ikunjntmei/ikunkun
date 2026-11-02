@@ -125,9 +125,6 @@ class BrowserManager {
 
       const { options } = buildContextOptions({ ...effective, proxy });
       
-      // 默认不开放远程调试端口，杜绝页面通过本地端口反向扫描判定 CDP 通信
-      const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
-
       const extraArgs = [
         '--no-first-run',
         '--no-default-browser-check',
@@ -154,7 +151,6 @@ class BrowserManager {
         args: [
           ...extraArgs,
           ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
-          ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
       };
@@ -199,14 +195,45 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // --- 关键注入：抹除 CDP 变量、对齐 brands 与保护 WebRTC 接口 ---
+      // --- 关键注入：深度抹除 CDP 堆栈特征与反自动化探针 ---
       await context.addInitScript(() => {
-        // 1. 消除 CDP 注入特征变量（解决 hasCDP: true 的核心来源）
+        // 1. 深度拦截 Error.prepareStackTrace 与 Error.prototype.stack，防止 CDP 调试上下文与注入脚本泄漏
+        try {
+          const originalPrepareStackTrace = Error.prepareStackTrace;
+          Error.prepareStackTrace = function (error, structuredStackTrace) {
+            if (typeof originalPrepareStackTrace === 'function') {
+              return originalPrepareStackTrace(error, structuredStackTrace);
+            }
+            return error.stack;
+          };
+
+          const desc = Object.getOwnPropertyDescriptor(Error.prototype, 'stack');
+          if (desc && desc.get) {
+            const originalGet = desc.get;
+            Object.defineProperty(Error.prototype, 'stack', {
+              get: function () {
+                const s = originalGet.call(this);
+                if (typeof s === 'string') {
+                  // 抹除 CDP 自动化评估痕迹及 Playwright 注入标记
+                  return s
+                    .split('\n')
+                    .filter(line => !line.includes('__playwright') && !line.includes('evaluate') && !line.includes('anonymous'))
+                    .join('\n');
+                }
+                return s;
+              },
+              configurable: true,
+              enumerable: false
+            });
+          }
+        } catch (_) {}
+
+        // 2. 清理全局可能泄漏的 cdc_ 变量与属性
         try {
           const cleanCDP = () => {
             const keys = Object.keys(window).concat(Object.keys(document));
             for (const key of keys) {
-              if (key.match(/^cdc_[a-z0-9]/ig)) {
+              if (/^cdc_[a-z0-9]/i.test(key)) {
                 delete window[key];
                 delete document[key];
               }
@@ -216,7 +243,7 @@ class BrowserManager {
           window.addEventListener('DOMContentLoaded', cleanCDP);
         } catch (_) {}
 
-        // 2. 原生原型链校准（确保 navigator.webdriver 为 false 且在原型上）
+        // 3. 规范化 navigator.webdriver 状态与原型链
         try {
           if (navigator.webdriver !== false) {
             Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
@@ -227,7 +254,7 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 3. 保留 RTCPeerConnection 原生定义，阻断外网打洞，避免抛出 ReferenceError 异常
+        // 4. 保留并安全代理 RTCPeerConnection 接口，清空外部 ICE 服务器，杜绝 ReferenceError
         try {
           if (typeof window.RTCPeerConnection !== 'undefined') {
             const NativeRTC = window.RTCPeerConnection;
@@ -239,7 +266,7 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 4. 补齐 Google Chrome 专属 Brand，使 brands 结构与 UA 声明一致
+        // 5. 补齐 Google Chrome 专属 Brand，使 brands 结构与 UA 声明一致
         try {
           if (navigator.userAgentData) {
             const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
@@ -266,7 +293,7 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 5. 补齐 Chrome 运行时结构
+        // 6. 补齐 Chrome 运行时结构
         if (!window.chrome) {
           window.chrome = {};
         }
@@ -282,7 +309,7 @@ class BrowserManager {
       await configureDownloads(context);
       checkCancelled();
 
-      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
+      const session = { context, debugPort: null, headless, openedAt: Date.now(), forwarder, network };
       this.sessions.set(id, session);
 
       context.on('close', () => {
@@ -314,8 +341,7 @@ class BrowserManager {
         open: true,
         reused: false,
         headless,
-        network,
-        ...(debugPort ? { debug_url: `http://127.0.0.1:${debugPort}` } : {})
+        network
       };
     } catch (error) {
       await context?.close().catch(() => {});
