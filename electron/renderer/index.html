@@ -1,178 +1,229 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IKUN</title>
-<link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8">
+  <title>IKUN</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="app">
-  <!-- 侧边栏（含导航菜单） -->
-  <aside class="sidebar">
-    <div class="side-head">
-      <span class="app-name"><img class="brand-logo" src="../assets/icon.png" alt="">IKUN
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
-      </span>
-      <div class="side-head-icons">
-        <button class="icon-btn" id="btn-search" title="搜索">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        </button>
-      </div>
-    </div>
-
-    <nav class="menu">
-      <button class="menu-item" data-page="new">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-        新建环境
-      </button>
-      <button class="menu-item active" data-page="profiles">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
-        浏览器管理
-      </button>
-      <button class="menu-item" data-page="proxies">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>
-        代理管理
-      </button>
-      <button class="menu-item" data-page="settings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.96a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09A1.7 1.7 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09c0 .68.4 1.3 1.04 1.56a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09c.26.63.88 1.04 1.56 1.04H21a2 2 0 1 1 0 4h-.09c-.68 0-1.3.4-1.51 1.04z"/></svg>
-        设置
-      </button>
-    </nav>
-
-    <div class="side-section" id="group-section">
-      <button class="side-title" id="group-toggle">分组
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
-      </button>
-      <div id="group-list" class="group-list"></div>
-    </div>
-
-    <div class="side-foot" id="app-version" style="display: none;">本地运行</div>
-  </aside>
-
-  <!-- 主区 -->
-  <main class="main">
-    <div id="browser-banner" class="banner hidden">
-      <span>尚未下载 Chromium 内核，环境无法打开。下载约 170 MB，只需一次。</span>
-      <button id="btn-banner-download" class="btn small">立即下载</button>
-    </div>
-
-    <section id="page-new" class="page hidden">
-      <div class="page-head">
-        <h1>新建环境</h1>
-      </div>
-      <div class="cards">
-        <div class="card">
-          <h2>基本信息</h2>
-          <div class="field-row">
-            <p class="hint">环境名称自动使用递增数字编号，删除后不重复使用编号。</p>
-            <div class="field"><label>分组</label><input id="n-group" class="input" list="n-group-list" placeholder="可选，可选已有或输入新的">
-              <datalist id="n-group-list"></datalist>
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field"><label>指纹策略</label><p class="hint">原生一致 · 跟随本机系统与硬件</p></div>
-            <div class="field"><label>分辨率</label><select id="n-vp" class="input"></select></div>
-          </div>
+  <div id="app">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="side-head">
+        <div class="app-name">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          IKUN
         </div>
-        <div class="card">
-          <h2>代理 <span class="sub">（选择后自动检测，指纹参数自动跟随）</span></h2>
-          <div class="field"><label>代理</label>
+        <div class="side-head-icons">
+          <button class="icon-btn" id="btn-search" title="搜索环境">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <nav class="menu">
+        <button class="menu-item" data-page="new">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+          新建环境
+        </button>
+        <button class="menu-item active" data-page="profiles">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect width="18" height="14" x="3" y="3" rx="2"/><path d="M7 21h10M12 17v4"/></svg>
+          浏览器管理
+        </button>
+        <button class="menu-item" data-page="proxies">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          代理管理
+        </button>
+        <button class="menu-item" data-page="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          设置
+        </button>
+      </nav>
+
+      <div class="side-section grow" id="group-section">
+        <button class="side-title" id="group-toggle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          分组
+        </button>
+        <div class="group-list" id="group-list"></div>
+      </div>
+
+      <div class="side-foot" id="app-version">本地运行</div>
+    </aside>
+
+    <!-- 主展示区 -->
+    <main class="main">
+      <!-- 提示横幅 -->
+      <div id="browser-banner" class="banner hidden">
+        <span>尚未安装 Chromium 内核，请先完成安装以启动环境。</span>
+        <button class="btn small primary" id="btn-banner-download">前往设置下载</button>
+      </div>
+
+      <!-- 新建环境页面 -->
+      <section id="page-new" class="page hidden">
+        <div class="page-head">
+          <h1>新建环境</h1>
+        </div>
+        <div class="card" style="max-width: 600px;">
+          <div class="field">
+            <label>分组</label>
+            <input id="n-group" class="input" list="n-group-list" placeholder="选填，可选已有分组或直接输入">
+            <datalist id="n-group-list"></datalist>
+          </div>
+          <div class="field">
+            <label>代理</label>
             <div style="display:flex;gap:8px">
               <select id="n-proxy" class="input" style="flex:1"></select>
-              <button type="button" id="n-proxy-check" class="btn" style="flex-shrink:0">检测</button>
+              <button type="button" id="n-proxy-check" class="btn" style="flex-shrink:0">检测代理</button>
             </div>
-            <div id="n-proxy-result" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+            <div id="n-proxy-result" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+          </div>
+          <details class="advanced">
+            <summary>高级指纹设置</summary>
+            <div class="field-row" style="margin-top:10px">
+              <div class="field">
+                <label>语言</label>
+                <select id="n-locale" class="input"></select>
+              </div>
+              <div class="field">
+                <label>时区</label>
+                <select id="n-tz" class="input"></select>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>分辨率</label>
+                <select id="n-vp" class="input"></select>
+              </div>
+              <div class="field">
+                <label>WebRTC</label>
+                <select id="n-webrtc" class="input">
+                  <option value="auto">自动（限制直连 UDP）</option>
+                  <option value="default">默认</option>
+                  <option value="restricted">限制直连 UDP</option>
+                </select>
+              </div>
+            </div>
+          </details>
+          <div class="modal-foot" style="margin-top:24px">
+            <button class="btn" id="n-save">仅创建</button>
+            <button class="btn primary" id="n-save-open">创建并打开</button>
           </div>
         </div>
-        <div class="card">
-          <h2>指纹选项</h2>
-          <div class="field-row">
-            <div class="field"><label>语言</label><select id="n-locale" class="input"></select></div>
-            <div class="field"><label>时区</label><select id="n-tz" class="input"></select></div>
+      </section>
+
+      <!-- 环境管理页面 -->
+      <section id="page-profiles" class="page">
+        <div class="page-head">
+          <h1>环境管理</h1>
+          <div class="toolbar">
+            <input type="text" id="profile-search" class="input search" placeholder="搜索环境名称或分组…">
+            <button class="btn" id="btn-refresh-profiles">刷新</button>
+            <button class="btn primary" id="btn-open-profiles">批量打开</button>
+            <button class="btn danger-ghost" id="btn-del-profiles">批量删除</button>
           </div>
-          <p class="hint">CPU、内存、Canvas、Audio、显卡和浏览器版本沿用 Chromium 原生值，使页面与 Worker 保持一致。不同环境独立保存登录状态，但仍可能有相同硬件指纹。</p>
-          <div class="field"><label>WebRTC</label><select id="n-webrtc" class="input"><option value="auto">自动（限制直连 UDP）</option><option value="restricted">限制直连 UDP（可能影响通话）</option><option value="default">默认（绑定代理时仍限制 UDP）</option></select></div>
         </div>
-        <div class="row" style="margin-top:4px">
-          <button id="n-save" class="btn primary">创建环境</button>
-          <button id="n-save-open" class="btn">创建并打开</button>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;color:var(--muted)">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="profile-all"> 全选本页
+          </label>
+          <span id="profile-count">已选 0 项</span>
         </div>
-      </div>
-    </section>
+        <div class="env-cards" id="profiles-list"></div>
+      </section>
 
-    <section id="page-profiles" class="page">
-      <div class="page-head">
-        <h1>环境管理</h1>
-        <div class="toolbar">
-          <input id="profile-search" class="input search" placeholder="搜索名称 / 分组…">
-          <label><input type="checkbox" id="profile-all"> 全选筛选结果</label><span id="profile-count"></span>
-          <button id="btn-open-profiles" class="btn">打开选中</button>
-          <button id="btn-del-profiles" class="btn danger-ghost">删除选中</button>
-          <button id="btn-refresh-profiles" class="btn">刷新</button>
+      <!-- 代理管理页面 -->
+      <section id="page-proxies" class="page hidden">
+        <div class="page-head">
+          <h1>代理管理</h1>
+          <div class="toolbar">
+            <button class="btn primary" id="btn-add-proxy">添加代理</button>
+            <button class="btn" id="btn-check-proxies">批量检测</button>
+            <button class="btn danger-ghost" id="btn-del-proxies">批量删除</button>
+          </div>
         </div>
-      </div>
-      <div id="profiles-list" class="env-cards"></div>
-    </section>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;color:var(--muted)">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="proxy-all"> 全选本页
+          </label>
+          <span id="proxy-count">已选 0 项</span>
+        </div>
+        <div class="proxy-cards" id="proxies-list"></div>
+      </section>
 
-    <section id="page-proxies" class="page hidden">
-      <div class="page-head">
-        <h1>代理管理</h1>
-        <div class="toolbar">
-          <label><input type="checkbox" id="proxy-all"> 全选所有代理</label><span id="proxy-count"></span>
-          <button id="btn-add-proxy" class="btn primary">添加代理</button>
-          <button id="btn-check-proxies" class="btn">检测选中</button>
-          <button id="btn-del-proxies" class="btn danger-ghost">删除选中</button>
+      <!-- 设置页面 -->
+      <section id="page-settings" class="page hidden">
+        <div class="page-head">
+          <h1>系统设置</h1>
         </div>
-      </div>
-      <div id="proxies-list" class="proxy-cards"></div>
-      <p class="hint">批量添加每行一个：<code>host:port</code>、<code>host:port:用户名:密码</code> 或 <code>socks5://用户名:密码@host:port</code>，行尾加 <code>{备注}</code> 可命名。</p>
-    </section>
+        <div class="cards">
+          <!-- 内核管理 -->
+          <div class="card">
+            <h2>Chromium 内核</h2>
+            <div id="browser-status"></div>
+            <div class="progress hidden" id="browser-progress"><div class="bar"></div></div>
+            <div style="margin-top:14px">
+              <button class="btn small primary" id="btn-download-browser">下载 Chromium</button>
+            </div>
+            <div class="hint">用于隔离执行的独立浏览器渲染引擎。</div>
+          </div>
 
-    <section id="page-settings" class="page hidden">
-      <div class="page-head"><h1>系统设置</h1></div>
-      <div class="cards">
-        <div class="card">
-          <h2>本地 API</h2>
-          <label>服务地址</label>
-          <div class="row"><input id="set-api-url" class="input" readonly><button class="btn small" data-copy="set-api-url">复制</button></div>
-          <label>Token</label>
-          <div class="row"><input id="set-api-token" class="input mono" readonly type="password"><button class="btn small" id="btn-token-show">显示</button><button class="btn small" data-copy="set-api-token">复制</button></div>
-          <label>数据目录</label>
-          <div class="row"><input id="set-data-dir" class="input" readonly><button class="btn small" id="btn-open-data">打开</button></div>
-        </div>
-        <div class="card">
-          <h2>浏览器内核</h2>
-          <div id="browser-status" class="kv">检测中…</div>
-          <div id="browser-progress" class="progress hidden"><div class="bar"></div></div>
-          <div class="row"><button id="btn-download-browser" class="btn primary">下载 Chromium</button></div>
-          <p class="hint">按本版本锁定的 Playwright 版本下载匹配内核，保存在 IKUN 数据目录中；更新内核后重新打开环境生效。</p>
-        </div>
-        <div class="card">
-          <h2>网络</h2>
-          <label>SOCKS5 代理通过系统代理连接</label>
-          <div class="row"><select id="set-socks-system-proxy" class="input"><option value="no">否</option><option value="yes">是</option></select><button id="btn-save-proxy-route" class="btn primary small">保存</button></div>
-          <p class="hint">选择“是”后，浏览器先连本机中转，再经过当前电脑的系统代理连接 SOCKS5。没有填写代理时，只走系统代理。更改后重新打开环境生效。</p>
-        </div>
-        <div class="card">
-          <h2>软件更新</h2>
-          <div id="update-status" class="kv">尚未检查</div>
-          <div class="row"><button id="btn-check-update" class="btn small">检查更新</button><button id="btn-install-update" class="btn primary small hidden">下载并安装</button></div>
-          <p class="hint">仅支持已安装到“应用程序”的 Apple 芯片版。安装时 macOS 会要求确认权限，完成后自动重启。</p>
-        </div>
-        <div class="card">
-          <h2>关于</h2>
-          <div class="kv" id="about-box"></div>
-        </div>
-      </div>
-    </section>
-  </main>
-</div>
+          <!-- 网络设置 -->
+          <div class="card">
+            <h2>网络</h2>
+            <label>SOCKS5 代理通过系统代理连接</label>
+            <div class="row">
+              <select id="set-socks-system-proxy" class="input">
+                <option value="no">否</option>
+                <option value="yes">是</option>
+              </select>
+              <button class="btn small primary" id="btn-save-proxy-route">保存</button>
+            </div>
+            <div class="hint">选择“是”后，SOCKS5 请求将先转发至本地系统的全局代理网络。</div>
+          </div>
 
-<div id="modal-root"></div>
-<div id="toast-root"></div>
-<script src="environment-proxy.js"></script>
-<script src="app.js"></script>
+          <!-- 本地服务接口 -->
+          <div class="card">
+            <h2>Local API</h2>
+            <label>服务地址</label>
+            <div class="row">
+              <input id="set-api-url" class="input" readonly>
+              <button class="btn small" data-copy="set-api-url">复制</button>
+            </div>
+            <label>Token</label>
+            <div class="row">
+              <input id="set-api-token" class="input" type="password" readonly>
+              <button class="btn small" id="btn-token-show">显示</button>
+              <button class="btn small" data-copy="set-api-token">复制</button>
+            </div>
+            <label>数据目录</label>
+            <div class="row" style="margin-top:6px">
+              <button class="btn small" id="btn-open-data">打开本地数据目录</button>
+            </div>
+          </div>
+
+          <!-- 软件更新（已隐藏） -->
+          <div class="card hidden">
+            <h2>软件更新</h2>
+            <div id="update-status" class="sub" style="margin-bottom:8px">尚未检查</div>
+            <button class="btn small" id="btn-check-update">检查更新</button>
+            <button class="btn small primary hidden" id="btn-install-update">下载并安装更新</button>
+            <div class="hint">仅支持已安装到“应用程序”的 Apple 芯片版。安装时 macOS 会要求确认权限，完成后自动重启。</div>
+          </div>
+
+          <!-- 关于信息（已隐藏） -->
+          <div class="card hidden">
+            <h2>关于</h2>
+            <div class="kv" id="about-box"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <script src="app.js"></script>
 </body>
 </html>
