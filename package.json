@@ -20,7 +20,7 @@
   },
   "build": {
     "appId": "local.ikun.browser",
-    "productName": "IKUN",
+    "productName": "ikun",
     "directories": {
       "output": "dist"
     },
@@ -45,7 +45,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "IKUN"
+      "shortcutName": "ikun"
     }
   },
   "dependencies": {
