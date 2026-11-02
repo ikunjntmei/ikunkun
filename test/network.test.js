@@ -80,7 +80,7 @@ test('curl forces selected proxy despite NO_PROXY and keeps authentication out o
 });
 
 test('browser has no direct HTTP fallback when proxy closes and sends no local STUN UDP under restricted policy', { timeout: 45000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cike-network-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-network-'));
   let directHits = 0, packets = 0;
   const target = http.createServer((req, res) => { directHits++; res.end('direct'); }); await listen(target);
   const proxy = http.createServer((req, res) => { res.setHeader('content-type', 'text/html'); res.end('<!doctype html>proxied'); });
