@@ -31,11 +31,10 @@ jobs:
         run: npm install -D electron-builder
 
       - name: Build and Package Windows Executable
-        run: npm run dist
+        run: npx electron-builder --win --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 这一步负责把打包出的 exe 和 blockmap 文件上传到 Release
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
