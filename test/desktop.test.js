@@ -9,7 +9,7 @@ const { ProfileStore } = require('../src/store');
 const { ProxyStore } = require('../src/proxystore');
 
 test('sandboxed desktop UI can authenticate, migrate profiles and protect secrets with safeStorage', { timeout: 60000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cike-desktop-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-desktop-'));
   if (process.env.LFB_CHROMIUM_EXECUTABLE) {
     fs.mkdirSync(path.join(dir, 'browsers'));
     fs.writeFileSync(path.join(dir, 'browsers/chromium-executable.txt'), process.env.LFB_CHROMIUM_EXECUTABLE);
@@ -18,15 +18,15 @@ test('sandboxed desktop UI can authenticate, migrate profiles and protect secret
   // Re-signed ad-hoc packages can require interactive Keychain approval on
   // macOS. Exercise encryption in the stable source Electron binary; package
   // smoke tests use empty credentials and still verify sandbox/UI/migration.
-  const secret = process.env.CIKE_TEST_APP ? '' : 'desktop-fixture-secret';
+  const secret = process.env.IKUN_TEST_APP ? '' : 'desktop-fixture-secret';
   const saved = proxies.add({ type: 'http', host: '127.0.0.1', port: 9, password: secret });
   const p = profiles.create({ name: 'Legacy fixture', proxyId: saved.id });
   const records = JSON.parse(fs.readFileSync(profiles.file)); delete records[p.id].fingerprintMode;
   fs.writeFileSync(profiles.file, JSON.stringify(records));
   let app;
   try {
-    app = await _electron.launch({ args: process.env.CIKE_TEST_APP ? [] : [path.resolve(__dirname, '..')],
-      ...(process.env.CIKE_TEST_APP ? { executablePath: process.env.CIKE_TEST_APP } : {}),
+    app = await _electron.launch({ args: process.env.IKUN_TEST_APP ? [] : [path.resolve(__dirname, '..')],
+      ...(process.env.IKUN_TEST_APP ? { executablePath: process.env.IKUN_TEST_APP } : {}),
       env: { ...process.env, LFB_DATA: dir }, timeout: 30000 });
     const page = await app.firstWindow();
     await page.getByText('Legacy fixture', { exact: true }).waitFor();
@@ -51,7 +51,7 @@ test('sandboxed desktop UI can authenticate, migrate profiles and protect secret
     await page.getByText('环境已创建', { exact: true }).waitFor();
     assert.equal(Object.keys(JSON.parse(fs.readFileSync(profiles.file))).length, 2);
     await app.evaluate(async ({ clipboard }) => {
-      globalThis.cikeClipboardBackup = await clipboard.read();
+      globalThis.ikunClipboardBackup = await clipboard.read();
       await clipboard.writeText('socks5://fixture-user:fixture-pass@127.0.0.1:1080');
     });
     try {
@@ -78,15 +78,15 @@ test('sandboxed desktop UI can authenticate, migrate profiles and protect secret
         await newCard.locator('[data-act="close"]').click();
         await newCard.getByText('已关闭', { exact: true }).waitFor();
       }
-      if (process.env.CIKE_SCREENSHOT) await page.screenshot({ path: process.env.CIKE_SCREENSHOT });
+      if (process.env.IKUN_SCREENSHOT) await page.screenshot({ path: process.env.IKUN_SCREENSHOT });
     } finally {
       await app.evaluate(async ({ clipboard, ClipboardItem }) => {
-        const items = await Promise.all(globalThis.cikeClipboardBackup.map(async item => {
+        const items = await Promise.all(globalThis.ikunClipboardBackup.map(async item => {
           const entries = await Promise.all(item.types.map(async type => [type, await item.getType(type)]));
           return new ClipboardItem(Object.fromEntries(entries));
         }));
         if (items.length) await clipboard.write(items); else clipboard.clear();
-        delete globalThis.cikeClipboardBackup;
+        delete globalThis.ikunClipboardBackup;
       });
     }
   } finally { await app?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
