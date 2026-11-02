@@ -89,7 +89,7 @@ function initTray(iconPath) {
   if (tray || !iconPath) return;
 
   tray = new Tray(iconPath);
-  tray.setToolTip('ikun 环境管理');
+  tray.setToolTip('ikun');
 
   const trayMenu = Menu.buildFromTemplate([
     {
