@@ -160,6 +160,9 @@ class BrowserManager {
       const isWin = process.platform === 'win32';
       const winCandidates = [
         process.env.LFB_CHROMIUM_EXECUTABLE,
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
         path.join(this.store.dataDir, 'chromium', 'chrome.exe'),
         path.join(this.store.dataDir, 'chromium-1148', 'chrome.exe'),
         path.join(this.store.dataDir, 'browsers', 'chromium', 'chrome.exe'),
@@ -194,27 +197,48 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // --- 运行时注入补齐与反检测 ---
+      // --- 关键注入：修复 WebRTC 异常并规范 brands 属性 ---
       await context.addInitScript(() => {
-        // 1. 补齐 Google Chrome 专属 Brand，对齐 navigator.userAgentData 与 UA 声明
-        if (navigator.userAgentData) {
-          try {
+        // 1. 保留 RTCPeerConnection 接口，拦截服务器配置以阻断真实打洞，避免 ReferenceError
+        try {
+          if (typeof window.RTCPeerConnection !== 'undefined') {
+            const NativeRTC = window.RTCPeerConnection;
+            window.RTCPeerConnection = function (config, constraints) {
+              const safeConfig = config ? { ...config, iceServers: [] } : { iceServers: [] };
+              return new NativeRTC(safeConfig, constraints);
+            };
+            window.RTCPeerConnection.prototype = NativeRTC.prototype;
+          }
+        } catch (_) {}
+
+        // 2. 补齐 Google Chrome 专属 Brand，使 brands 结构与 UA 声明一致
+        try {
+          if (navigator.userAgentData) {
             const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
-            const chromeVersion = chromeMatch ? chromeMatch[1] : '130';
+            const chromeVersion = chromeMatch ? chromeMatch[1] : '156';
             const completeBrands = [
               { brand: 'Not:A-Brand', version: '8' },
               { brand: 'Chromium', version: chromeVersion },
               { brand: 'Google Chrome', version: chromeVersion }
             ];
+
+            const proto = Object.getPrototypeOf(navigator.userAgentData);
+            if (proto) {
+              Object.defineProperty(proto, 'brands', {
+                get: () => completeBrands,
+                configurable: true,
+                enumerable: true
+              });
+            }
             Object.defineProperty(navigator.userAgentData, 'brands', {
               get: () => completeBrands,
               configurable: true,
               enumerable: true
             });
-          } catch (_) {}
-        }
+          }
+        } catch (_) {}
 
-        // 2. 维持原生的 navigator.webdriver = false
+        // 3. 规范化 navigator.webdriver 状态
         try {
           if (navigator.webdriver !== false) {
             Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
@@ -225,7 +249,7 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 3. 补齐真实 Chrome 对象结构
+        // 4. 补齐 Chrome 运行时结构
         if (!window.chrome) {
           window.chrome = {};
         }
@@ -236,14 +260,6 @@ class BrowserManager {
             PlatformOs: { WIN: 'win' }
           };
         }
-
-        // 4. 清理 WebRTC 对象避免任何直连穿透
-        try {
-          delete window.RTCPeerConnection;
-          delete window.webkitRTCPeerConnection;
-          delete window.RTCSessionDescription;
-          delete window.RTCIceCandidate;
-        } catch (_) {}
       });
 
       await configureDownloads(context);
