@@ -110,7 +110,7 @@ class BrowserManager {
         proxyServerArg = `${scheme}://${host}:${proxyRecord.port}`;
       }
 
-      // 仅使用 CIKE 目录内或 Playwright 自带的独立 Chromium，坚决不触碰电脑系统 Chrome
+      // 获取内置独立 Chromium 执行路径
       const isolatedCandidates = [
         process.env.LFB_CHROMIUM_EXECUTABLE,
         path.join(this.store.dataDir, 'chromium', 'chrome.exe'),
@@ -127,7 +127,6 @@ class BrowserManager {
         }
       }
 
-      // 如果应用数据目录内没有放独立包，直接调用 playwright 自带的独立 chromium 内核二进制
       if (!executablePath) {
         try {
           executablePath = chromium.executablePath();
@@ -135,7 +134,7 @@ class BrowserManager {
       }
 
       if (!executablePath || !fs.existsSync(executablePath)) {
-        throw new Error('未找到内置的 Chromium 执行文件，请确认运行时包已下载完整');
+        throw new Error('未检测到可用的独立 Chromium 内核，请确认依赖完整');
       }
 
       const directory = path.resolve(this.store.profileDir(id));
@@ -144,10 +143,11 @@ class BrowserManager {
 
       const targetUrl = 'https://iphey.com';
 
-      // 独立拉起参数：完全隔离数据、隔离单实例、不挂载任何自动化探针
+      // 关键启动参数：强制激活前台独立渲染视窗，避免无界面挂起
       const chromeArgs = [
         `--user-data-dir=${directory}`,
         '--new-window',
+        '--window-position=120,80',
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-component-update',
@@ -162,9 +162,9 @@ class BrowserManager {
         targetUrl
       ];
 
-      if (effective.viewport?.width && effective.viewport?.height) {
-        chromeArgs.push(`--window-size=${effective.viewport.width},${effective.viewport.height}`);
-      }
+      const width = effective.viewport?.width || 1280;
+      const height = effective.viewport?.height || 800;
+      chromeArgs.push(`--window-size=${width},${height}`);
 
       checkCancelled();
 
@@ -173,7 +173,7 @@ class BrowserManager {
         spawnEnv.TZ = effective.timezone;
       }
 
-      // 脱离控制端完全独立启动，不注入任何 CDP 管道
+      // 拉起独立渲染窗口，明确输出管道以便排查崩溃
       const child = spawn(executablePath, chromeArgs, {
         detached: true,
         stdio: 'ignore',
@@ -182,6 +182,19 @@ class BrowserManager {
       });
 
       child.unref();
+
+      // 启动验证：若进程瞬间退出（例如参数致命错误），则判定启动失败
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(), 600);
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          reject(new Error(`Chromium 启动后异常退出 (退出代码: ${code})`));
+        });
+        child.once('error', (err) => {
+          clearTimeout(timer);
+          reject(new Error(`无法启动 Chromium 进程: ${err.message}`));
+        });
+      });
 
       const session = {
         process: child,
