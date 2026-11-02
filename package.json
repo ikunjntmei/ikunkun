@@ -1,5 +1,5 @@
 {
-  "name": "cike",
+  "name": "ikun",
   "version": "0.7.0",
   "description": "Local multi-profile fingerprint browser with a local automation API. Clean-room implementation for learning/research. No vendor backend required.",
   "main": "electron/main.js",
@@ -12,15 +12,15 @@
     "start": "node src/server.js",
     "electron": "electron .",
     "dist:win": "electron-builder --win --x64",
-    "pack:mac-arm64": "electron-packager . CIKE --icon=electron/assets/icon.icns --platform=darwin --arch=arm64 --out=dist --overwrite --prune --ignore=\"^/(test|.browsers|dist|.*.zip$)\"",
+    "pack:mac-arm64": "electron-packager . IKUN --icon=electron/assets/icon.icns --platform=darwin --arch=arm64 --out=dist --overwrite --prune --ignore=\"^/(test|.browsers|dist|.*.zip$)\"",
     "test": "node --test --test-concurrency=1 test/security.test.js test/network.test.js test/runtime.test.js test/downloads.js test/environments.test.js",
     "test:desktop": "node --test test/desktop.test.js",
     "test:icons": "node --test test/profile-icons.test.js",
     "smoke": "node test/smoke.js"
   },
   "build": {
-    "appId": "local.cike.browser",
-    "productName": "CIKE",
+    "appId": "local.ikun.browser",
+    "productName": "IKUN",
     "directories": {
       "output": "dist"
     },
@@ -40,7 +40,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "CIKE"
+      "shortcutName": "IKUN"
     }
   },
   "dependencies": {
