@@ -116,10 +116,15 @@ class BrowserManager {
         const scheme = proxyRecord.type === 'socks5' ? 'socks5' : 'http';
         const host = proxyRecord.host.includes(':') ? `[${proxyRecord.host}]` : proxyRecord.host;
         proxyServerArg = `${scheme}://${host}:${proxyRecord.port}`;
-        proxy = { server: proxyServerArg };
+        proxy = { 
+          server: proxyServerArg,
+          ...(proxyRecord.username ? { username: proxyRecord.username } : {}),
+          ...(proxyRecord.password ? { password: proxyRecord.password } : {})
+        };
       }
 
-      const { options } = buildContextOptions({ ...effective, proxy: null });
+      // 提取 profile 选项，并保留规范的代理对象
+      const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
       
       const extraArgs = [
@@ -136,13 +141,13 @@ class BrowserManager {
         '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
       ];
 
-      // 核心：直接通过 Chromium 底层参数强制指定代理，彻底杜绝回退直连
       if (proxyServerArg) {
         extraArgs.push(`--proxy-server=${proxyServerArg}`);
       }
 
       const launchOptions = {
         ...options,
+        proxy: proxy || undefined, // Playwright 上下文必须持有规范 proxy 对象
         headless,
         chromiumSandbox: true,
         ignoreDefaultArgs: ['--enable-automation'],
@@ -153,9 +158,6 @@ class BrowserManager {
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
       };
-
-      // 禁用 Playwright 顶层的 proxy 配置，完全交由底层的 --proxy-server 处理
-      delete launchOptions.proxy;
 
       const isWin = process.platform === 'win32';
       const winCandidates = [
@@ -191,43 +193,39 @@ class BrowserManager {
       const directory = this.store.profileDir(id);
       privateDirectory(directory);
       await prepareDownloads(directory, this.downloadsDirectory);
-      context = await chromium.launchPersistentContext(directory, launchOptions);
-      await configureDownloads(context);
 
-      // --- 防自动化与指纹深度擦除注入 ---
+      // 启动 Persistent Context
+      context = await chromium.launchPersistentContext(directory, launchOptions);
+
+      // --- 关键：最前置注入防检测脚本，并清理 Playwright 特征 ---
       await context.addInitScript(() => {
-        // 1. 原型链级别彻底伪造 navigator.webdriver
+        // 1. 删除 navigator.webdriver 使得它返回 undefined，与真实 Chrome 行为完全一致
         try {
-          const proto = Object.getPrototypeOf(navigator);
-          Object.defineProperty(proto, 'webdriver', {
-            get: () => false,
+          const newProto = navigator.__proto__;
+          delete newProto.webdriver;
+        } catch (_) {}
+
+        // 2. 伪造真实 Chrome 的全局对象与运行时
+        if (!window.chrome) {
+          window.chrome = {};
+        }
+        window.chrome.app = { isInstalled: false };
+        window.chrome.runtime = {
+          PlatformArch: { X86_64: 'x86-64' },
+          PlatformOs: { WIN: 'win' },
+          OnInstalledReason: { INSTALL: 'install' }
+        };
+
+        // 3. 伪造插件列表（Playwright 默认为空，容易被判定为自动化）
+        try {
+          Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5],
             enumerable: true,
             configurable: true
           });
         } catch (_) {}
 
-        // 2. 补齐 Chrome 运行时特性
-        window.chrome = {
-          app: { isInstalled: false },
-          runtime: {
-            PlatformArch: { ARM: 'arm', ARM64: 'arm64', X86_64: 'x86-64' },
-            PlatformOs: { WIN: 'win', MAC: 'mac', LINUX: 'linux' }
-          },
-          loadTimes: () => ({}),
-          csi: () => ({})
-        };
-
-        // 3. 修复 permissions 状态查询
-        const originalQuery = window.navigator.permissions?.query;
-        if (originalQuery) {
-          window.navigator.permissions.query = parameters => (
-            parameters.name === 'notifications'
-              ? Promise.resolve({ state: Notification.permission })
-              : originalQuery(parameters)
-          );
-        }
-
-        // 4. 清除 WebRTC 原生对象，确保绝不穿透
+        // 4. 清理 WebRTC 对象，防止 UDP 探测真实 IP
         try {
           delete window.RTCPeerConnection;
           delete window.webkitRTCPeerConnection;
@@ -236,6 +234,17 @@ class BrowserManager {
         } catch (_) {}
       });
 
+      // 关键：给首次启动自动创建的已有页面补打补丁，并刷新页面以生效防检测
+      const existingPages = context.pages();
+      for (const page of existingPages) {
+        await page.evaluate(() => {
+          try {
+            delete navigator.__proto__.webdriver;
+          } catch (_) {}
+        }).catch(() => {});
+      }
+
+      await configureDownloads(context);
       checkCancelled();
 
       const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
