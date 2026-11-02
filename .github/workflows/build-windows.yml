@@ -1,0 +1,81 @@
+name: Build CIKE for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          npm install --legacy-peer-deps
+
+      - name: Install electron-builder
+        run: |
+          npm install --save-dev electron-builder
+
+      - name: Setup electron-builder config without strict icon
+        shell: pwsh
+        run: |
+          $pkgPath = "package.json"
+          $pkg = Get-Content $pkgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+          if (-not $pkg.main) {
+            $pkg | Add-Member -MemberType NoteProperty -Name "main" -Value "electron/main.js"
+          }
+
+          $buildConfig = @{
+            appId = "com.chainfix.cike"
+            productName = "CIKE"
+            directories = @{
+              output = "dist-win"
+            }
+            files = @(
+              "**/*",
+              "!dist-win/**",
+              "!.git/**"
+            )
+            win = @{
+              target = @("nsis", "portable")
+            }
+            nsis = @{
+              oneClick = $false
+              allowToChangeInstallationDirectory = $true
+            }
+          }
+
+          if ($pkg.build) {
+            $pkg.build = $buildConfig
+          } else {
+            $pkg | Add-Member -MemberType NoteProperty -Name "build" -Value $buildConfig
+          }
+
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content $pkgPath -Encoding UTF8
+
+      - name: Build Windows Executables
+        run: |
+          npx electron-builder --win --x64 --publish never -c.win.icon=null
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CIKE-Windows-x64
+          path: |
+            dist-win/*.exe
+          retention-days: 14
