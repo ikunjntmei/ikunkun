@@ -104,7 +104,8 @@ async function downloadFile(url, dest, onProgress, redirects = 0) {
     if (done > 1024 * 1024 * 1024) response.destroy(new Error('内核安装包异常过大'));
     onProgress?.({ done, total, pct: total ? Math.round(done / total * 100) : 0 });
   });
-  await pipeline(response, fs.createWriteStream(dest, { flags: 'wx', mode: 0o600 }));
+  // 修复点 1：使用 'w' 覆写模式，防止 Windows 下二次下载时抛出 EEXIST
+  await pipeline(response, fs.createWriteStream(dest, { flags: 'w' }));
 }
 
 function findExecutable(root) {
@@ -123,12 +124,17 @@ function findExecutable(root) {
   return null;
 }
 
+// 辅助等待函数，用于避开 Windows 下子进程退出后的短暂文件锁
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function install(dir, onProgress) {
   const status = await chromiumStatus(dir);
   if (status.installed && !status.updateAvailable) return status.executable;
   privateDirectory(browserRoot(dir));
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cike-chromium-'));
   const staging = fs.mkdtempSync(path.join(browserRoot(dir), '.install-'));
+  let renameSuccess = false;
+
   try {
     const zip = path.join(tmp, 'chromium.zip');
     await downloadFile(downloadUrl(), zip, onProgress);
@@ -149,26 +155,46 @@ async function install(dir, onProgress) {
 
     try {
       const { stdout } = await exec(executable, ['--version'], { 
-        timeout: 10000,
+        timeout: 10000, 
         windowsHide: true,
         env: { ...process.env, CHROME_HEADLESS: '1' }
       });
       if (!stdout.includes(chromiumEntry().browserVersion)) throw new Error('下载的内核版本不匹配');
     } catch (err) {
-      // 容错处理：Windows 下运行可能会有 crashpad 警告并向 stderr 打印日志导致报错，只要文件存在则跳过强制校验
       if (process.platform !== 'win32') throw err;
     }
 
-    const destination = path.join(browserRoot(dir), `${chromiumEntry().browserVersion}-${path.basename(staging).slice(9)}`);
+    // 修复点 2：在 Windows 下给文件句柄释放留出 300ms 缓冲，防止 EPERM / EBUSY
+    if (process.platform === 'win32') {
+      await sleep(300);
+    }
+
+    const suffix = path.basename(staging).replace(/^\.install-?/, '') || Date.now().toString(36);
+    const destination = path.join(browserRoot(dir), `${chromiumEntry().browserVersion}-${suffix}`);
     const relative = path.relative(staging, executable);
-    fs.renameSync(staging, destination);
+
+    // 带重试机制的重命名
+    for (let i = 0; i < 5; i++) {
+      try {
+        fs.renameSync(staging, destination);
+        renameSuccess = true;
+        break;
+      } catch (err) {
+        if (i === 4 || process.platform !== 'win32') throw err;
+        await sleep(500);
+      }
+    }
+
     const final = path.join(destination, relative);
     writePrivate(executableMarker(dir), final + '\n');
     onProgress?.({ done: 1, total: 1, pct: 100 });
     return final;
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
-    fs.rmSync(staging, { recursive: true, force: true });
+    // 只有在重命名未成功时才需要清理 staging
+    if (!renameSuccess) {
+      fs.rmSync(staging, { recursive: true, force: true });
+    }
   }
 }
 
