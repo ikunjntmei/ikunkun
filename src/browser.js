@@ -157,111 +157,16 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // --- 关键注入：彻底切断反爬脚本对 CDP 的探测链路 ---
+      // 仅保留原生属性规范，避免过度注入导致反爬触发 (jungle)
       await context.addInitScript(() => {
-        // 1. 深度防护 Console 隐式 Getter 探测（核心突破口）
-        // MixVisit / IPhey 检测 CDP 的常见手段是执行类似 console.debug({ get id() { /* CDP 触发 */ } })
-        // 通过代理 console 方法，在传入底层前将探测对象解耦，阻止 CDP 调试器序列化触发 getter
-        try {
-          const methods = ['debug', 'log', 'info', 'warn', 'error', 'table', 'dir', 'trace'];
-          for (const method of methods) {
-            const original = console[method];
-            if (typeof original === 'function') {
-              console[method] = new Proxy(original, {
-                apply(target, thisArg, args) {
-                  try {
-                    const sanitizedArgs = args.map(arg => {
-                      if (arg !== null && typeof arg === 'object' && !(arg instanceof Error)) {
-                        return '[Object]';
-                      }
-                      return arg;
-                    });
-                    return Reflect.apply(target, thisArg, sanitizedArgs);
-                  } catch (_) {
-                    return Reflect.apply(target, thisArg, args);
-                  }
-                }
-              });
-            }
-          }
-        } catch (_) {}
-
-        // 2. 清理自动化注入属性（cdc_ 开头的变量）
-        try {
-          const purgeCDC = () => {
-            const keys = Object.keys(window).concat(Object.keys(document));
-            for (const key of keys) {
-              if (/^cdc_[a-z0-9]/i.test(key)) {
-                try { delete window[key]; } catch (_) {}
-                try { delete document[key]; } catch (_) {}
-              }
-            }
-          };
-          purgeCDC();
-          window.addEventListener('DOMContentLoaded', purgeCDC, { once: true });
-        } catch (_) {}
-
-        // 3. 规范化 navigator.webdriver 状态与原型描述
         try {
           if (navigator.webdriver !== false) {
-            Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+            Object.defineProperty(navigator, 'webdriver', {
               get: () => false,
-              configurable: true,
-              enumerable: true
+              configurable: true
             });
           }
         } catch (_) {}
-
-        // 4. 补齐 Chrome 专属 brands，对齐正版 Chrome 结构
-        try {
-          if (navigator.userAgentData) {
-            const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
-            const chromeVersion = chromeMatch ? chromeMatch[1] : '130';
-            const completeBrands = [
-              { brand: 'Not:A-Brand', version: '8' },
-              { brand: 'Chromium', version: chromeVersion },
-              { brand: 'Google Chrome', version: chromeVersion }
-            ];
-
-            const proto = Object.getPrototypeOf(navigator.userAgentData);
-            if (proto) {
-              Object.defineProperty(proto, 'brands', {
-                get: () => completeBrands,
-                configurable: true,
-                enumerable: true
-              });
-            }
-            Object.defineProperty(navigator.userAgentData, 'brands', {
-              get: () => completeBrands,
-              configurable: true,
-              enumerable: true
-            });
-          }
-        } catch (_) {}
-
-        // 5. 确保原生 RTCPeerConnection 存在，阻断非代理外网探测
-        try {
-          if (typeof window.RTCPeerConnection !== 'undefined') {
-            const NativeRTC = window.RTCPeerConnection;
-            window.RTCPeerConnection = function (config, constraints) {
-              const safeConfig = config ? { ...config, iceServers: [] } : { iceServers: [] };
-              return new NativeRTC(safeConfig, constraints);
-            };
-            window.RTCPeerConnection.prototype = NativeRTC.prototype;
-          }
-        } catch (_) {}
-
-        // 6. 补齐 Chrome 运行时结构
-        if (!window.chrome) {
-          window.chrome = {};
-        }
-        if (!window.chrome.runtime) {
-          window.chrome.runtime = {
-            OnInstalledReason: { INSTALL: 'install' },
-            PlatformArch: { X86_64: 'x86-64' },
-            PlatformOs: { WIN: 'win' }
-          };
-        }
       });
 
       await configureDownloads(context);
