@@ -14,6 +14,7 @@ const DEFAULT_SPEC = {
   hardwareConcurrency: null, deviceMemory: null, webrtc: 'auto', colorScheme: 'light',
 };
 const pick = value => Object.fromEntries(Object.keys(DEFAULT_SPEC).filter(k => Object.hasOwn(value, k)).map(k => [k, value[k]]));
+
 class ProfileStore {
   constructor(dataDir, secretStorage) {
     this.dataDir = dataDir;
@@ -36,18 +37,22 @@ class ProfileStore {
     }
     if (fs.existsSync(this.file)) this._save(); // Migrate permissions/encryption, not fingerprints.
   }
+
   _save() {
     const records = structuredClone(this.profiles);
     for (const p of Object.values(records)) if (p.proxy) p.proxy.password = this.codec.encode(p.proxy.password);
     writeJSON(this.file, records);
   }
+
   create(spec = {}) {
     const id = 'p_' + crypto.randomBytes(6).toString('hex');
     const now = new Date().toISOString();
     const sequence = this.sequence + 1;
-    const record = { ...structuredClone(DEFAULT_SPEC), ...pick(spec), id,
+    const record = {
+      ...structuredClone(DEFAULT_SPEC), ...pick(spec), id,
       name: String(spec.name || '').trim() || String(sequence), sequence,
-      viewport: { ...DEFAULT_SPEC.viewport, ...spec.viewport }, createdAt: now, updatedAt: now };
+      viewport: { ...DEFAULT_SPEC.viewport, ...spec.viewport }, createdAt: now, updatedAt: now
+    };
     validateProfile(record);
     if (record.proxy) validateInlineProxy(record.proxy);
     this.sequence = sequence;
@@ -56,8 +61,15 @@ class ProfileStore {
     try { this._save(); } catch (error) { delete this.profiles[id]; throw error; }
     return structuredClone(record);
   }
-  list() { return Object.values(this.profiles).map(p => structuredClone(p)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.sequence || 0) - (b.sequence || 0)); }
-  get(id) { return Object.hasOwn(this.profiles, id) ? structuredClone(this.profiles[id]) : null; }
+
+  list() {
+    return Object.values(this.profiles).map(p => structuredClone(p)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.sequence || 0) - (b.sequence || 0));
+  }
+
+  get(id) {
+    return Object.hasOwn(this.profiles, id) ? structuredClone(this.profiles[id]) : null;
+  }
+
   update(id, patch = {}) {
     const old = this.get(id);
     if (!old) return null;
@@ -67,8 +79,10 @@ class ProfileStore {
       // proxy credentials into a second unencrypted copy.
       const keys = ['platform', 'userAgent', 'canvasSeed', 'canvasNoise', 'hardwareConcurrency', 'deviceMemory', 'webrtc'];
       next.previousFingerprint = Object.fromEntries(keys.map(k => [k, old[k] ?? null]));
-      Object.assign(next, { platform: HOST_PLATFORM, userAgent: null, canvasNoise: false, canvasSeed: null,
-        hardwareConcurrency: null, deviceMemory: null, webrtc: patch.webrtc || (old.webrtc === 'disabled' ? 'restricted' : old.webrtc || 'auto') });
+      Object.assign(next, {
+        platform: HOST_PLATFORM, userAgent: null, canvasNoise: false, canvasSeed: null,
+        hardwareConcurrency: null, deviceMemory: null, webrtc: patch.webrtc || (old.webrtc === 'disabled' ? 'restricted' : old.webrtc || 'auto')
+      });
     }
     if (old.fingerprintMode === 'native' || next.fingerprintMode !== 'legacy') validateProfile(next);
     if (next.proxy) {
@@ -81,18 +95,21 @@ class ProfileStore {
     try { this._save(); } catch (error) { this.profiles[id] = old; throw error; }
     return structuredClone(next);
   }
+
   recordOpened(id, network) {
     const p = this.get(id);
     if (!p) throw new Error('环境不存在');
     this.profiles[id] = { ...p, lastOpenedAt: new Date().toISOString(), lastNetwork: network };
     try { this._save(); } catch (error) { this.profiles[id] = p; throw error; }
   }
+
   recordNetwork(id, network) {
     const p = this.get(id);
     if (!p) return;
     this.profiles[id] = { ...p, lastNetwork: network };
     try { this._save(); } catch (error) { this.profiles[id] = p; throw error; }
   }
+
   remove(id) {
     const rec = this.get(id);
     if (!rec) return false;
@@ -104,14 +121,17 @@ class ProfileStore {
     fs.rmSync(app + '.json', { force: true });
     return true;
   }
+
   profileDir(id) {
     if (typeof id !== 'string' || !/^p_[a-f0-9]{12}$/.test(id)) throw new Error('无效的环境 ID');
     return path.join(this.dataDir, 'profiles', id);
   }
+
   public(record) {
     const p = structuredClone(record);
     if (p?.proxy) { p.proxy.hasAuth = !!p.proxy.password; delete p.proxy.password; }
     return p;
   }
 }
+
 module.exports = { ProfileStore, DEFAULT_SPEC };
