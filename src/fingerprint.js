@@ -132,11 +132,9 @@ class BrowserManager {
         '--check-for-update-interval=31536000',
         '--disable-component-update',
         '--disable-background-mode',
-        // 内核级禁用自动化特性，使 navigator.webdriver 保持原生 false 且原型链完整
         '--disable-blink-features=AutomationControlled',
         '--exclude-switches=enable-automation',
         '--disable-infobars',
-        // 强化 WebRTC 本地网络隔离
         '--enforce-webrtc-ip-permission-check',
         '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
       ];
@@ -150,7 +148,6 @@ class BrowserManager {
         proxy: proxy || undefined,
         headless,
         chromiumSandbox: true,
-        // 阻止 Playwright 默认添加测试与自动化参数
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
           ...extraArgs,
@@ -163,7 +160,6 @@ class BrowserManager {
       const isWin = process.platform === 'win32';
       const winCandidates = [
         process.env.LFB_CHROMIUM_EXECUTABLE,
-        // 优先检索官方正版 Google Chrome 安装路径，确保原生拥有完整 Google Chrome Brand 与证书
         'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
         'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
         path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
@@ -201,9 +197,31 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // --- 原生一致注入：杜绝破坏原型链或产生 Worker 交叉矛盾的修改 ---
+      // --- 原生结构对齐与真实性补齐 ---
       await context.addInitScript(() => {
-        // 1. 兜底保障：若个别内核未完全关闭 AutomationControlled，规范化修正原型链
+        // 1. 确保 brands 结构完整，必须具备真实 Chrome 的 3 项特征（规避开源 Chromium 的暴露）
+        if (navigator.userAgentData) {
+          try {
+            const brands = navigator.userAgentData.brands;
+            const hasGoogleChrome = brands && brands.some(b => b.brand === 'Google Chrome');
+            if (!hasGoogleChrome) {
+              const match = navigator.userAgent.match(/Chrome\/(\d+)/);
+              const ver = match ? match[1] : '130';
+              const completeBrands = [
+                { brand: 'Not:A-Brand', version: '8' },
+                { brand: 'Chromium', version: ver },
+                { brand: 'Google Chrome', version: ver }
+              ];
+              Object.defineProperty(navigator.userAgentData, 'brands', {
+                get: () => completeBrands,
+                configurable: true,
+                enumerable: true
+              });
+            }
+          } catch (_) {}
+        }
+
+        // 2. 原生原型链校准（确保 webdriver 留在原型链上且等于 false）
         try {
           if (navigator.webdriver !== false) {
             Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
@@ -214,7 +232,7 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 2. 补齐 Chrome 运行时结构（与原生无扩展状态一致）
+        // 3. 补齐 Chrome 运行时
         if (!window.chrome) {
           window.chrome = {};
         }
@@ -225,14 +243,6 @@ class BrowserManager {
             PlatformOs: { WIN: 'win' }
           };
         }
-
-        // 3. 抹除 WebRTC 接口，杜绝任何 UDP 直连穿透
-        try {
-          delete window.RTCPeerConnection;
-          delete window.webkitRTCPeerConnection;
-          delete window.RTCSessionDescription;
-          delete window.RTCIceCandidate;
-        } catch (_) {}
       });
 
       await configureDownloads(context);
