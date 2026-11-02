@@ -34,7 +34,7 @@ async function storage(page, write) {
   }, write);
 }
 test('native fingerprints agree across realms, sandbox stays enabled and five storage categories remain isolated', { timeout: 120000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cike-runtime-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-runtime-'));
   const server = http.createServer((q, r) => {
     if (q.url === '/worker.js') { r.setHeader('content-type', 'text/javascript'); r.end(`(${fingerprint.toString()})().then(x=>postMessage(x))`); }
     else if (q.url === '/shared.js') { r.setHeader('content-type', 'text/javascript'); r.end(`onconnect=e=>(${fingerprint.toString()})().then(x=>e.ports[0].postMessage(x));`); }
@@ -47,7 +47,7 @@ test('native fingerprints agree across realms, sandbox stays enabled and five st
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
     const a = store.create({ locale: 'en-US', timezone: 'America/New_York' }), b = store.create({ locale: 'en-US', timezone: 'America/New_York' });
-    const headless = process.env.CIKE_HEADED !== '1';
+    const headless = process.env.IKUN_HEADED !== '1';
     const results = await Promise.all([manager.open(a.id, { headless }), manager.open(a.id, { headless })]);
     assert.equal(manager.sessions.size, 1); assert.ok(results.every(r => !r.debug_url));
     const page = await manager.getContext(a.id).newPage(); await page.goto(origin);
