@@ -23,7 +23,7 @@ function run(args) {
   $.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.98, 0.98, 0.99, 1).setFill;
   $.NSBezierPath.bezierPathWithRect($.NSMakeRect(0, 0, 1024, 1024)).fill;
   const base = $.NSImage.alloc.initWithContentsOfFile(args[0]);
-  if (!base || base.isValid !== true) throw new Error('Cannot load CIKE logo');
+  if (!base || base.isValid !== true) throw new Error('Cannot load IKUN logo');
 
   const source = base.size;
   base.drawInRectFromRectOperationFraction(
