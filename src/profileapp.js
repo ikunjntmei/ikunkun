@@ -4,17 +4,21 @@ const path = require('path');
 const { promisify } = require('util');
 const exec = promisify(require('child_process').execFile);
 const { privateDirectory, writeJSON, readJSON } = require('./privatefiles');
+
 function findAppBundle(executable) {
   const end = executable.indexOf('.app/');
   return end < 0 ? null : executable.slice(0, end + 4);
 }
+
 function appsRoot(dataDir) { return path.join(dataDir, 'browsers', 'apps'); }
+
 async function ensureProfileApp(dataDir, profile, executable) {
   if (process.platform !== 'darwin') return executable;
   const source = findAppBundle(executable);
   if (!source) return executable;
   const root = appsRoot(dataDir); privateDirectory(root);
-  const destination = path.join(root, `CIKE-${profile.sequence}-${profile.id}.app`);
+  // 1. 修改生成的 app 命名为 IKUN
+  const destination = path.join(root, `IKUN-${profile.sequence}-${profile.id}.app`);
   const relative = path.relative(source, executable);
   const sourceStat = fs.statSync(executable);
   const identity = { source, size: sourceStat.size, mtime: sourceStat.mtimeMs, sequence: profile.sequence, revision: 3 };
@@ -35,7 +39,13 @@ async function ensureProfileApp(dataDir, profile, executable) {
     for (const key of ['CFBundleIconName', 'CFBundleIcons', 'CFBundleIcons~ipad']) {
       if (Object.hasOwn(originalInfo, key)) await exec('/usr/bin/plutil', ['-remove', key, plist]);
     }
-    for (const [key, value] of Object.entries({ CFBundleIdentifier: `local.cike.browser.${profile.id}`, CFBundleName: `CIKE #${profile.sequence}`, CFBundleDisplayName: `CIKE #${profile.sequence}`, CFBundleIconFile: 'cike-profile.icns' })) {
+    // 2-5. 修改 Info.plist 中的应用标识与图标文件名
+    for (const [key, value] of Object.entries({
+      CFBundleIdentifier: `local.ikun.browser.${profile.id}`,
+      CFBundleName: `IKUN #${profile.sequence}`,
+      CFBundleDisplayName: `IKUN #${profile.sequence}`,
+      CFBundleIconFile: 'ikun-profile.icns'
+    })) {
       await exec('/usr/bin/plutil', ['-replace', key, '-string', value, plist]);
     }
     const png = path.join(temporary, 'icon.png');
@@ -48,7 +58,8 @@ async function ensureProfileApp(dataDir, profile, executable) {
     for (const size of [16, 32, 128, 256, 512]) for (const scale of [1, 2]) {
       await exec('/usr/bin/sips', ['-z', String(size * scale), String(size * scale), png, '--out', path.join(iconset, `icon_${size}x${size}${scale === 2 ? '@2x' : ''}.png`)]);
     }
-    await exec('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', path.join(bundle, 'Contents/Resources/cike-profile.icns')]);
+    // 6. 输出图标名称改为 ikun-profile.icns
+    await exec('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', path.join(bundle, 'Contents/Resources/ikun-profile.icns')]);
     // Only this private clone is ad-hoc signed; preserve helper entitlements
     // and keep chromiumSandbox enabled. The downloaded original is untouched.
     await exec('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', '--preserve-metadata=entitlements', bundle], { timeout: 120000 });
@@ -59,4 +70,5 @@ async function ensureProfileApp(dataDir, profile, executable) {
     return path.join(destination, relative);
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
+
 module.exports = { ensureProfileApp, findAppBundle, appsRoot };
