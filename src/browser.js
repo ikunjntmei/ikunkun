@@ -2,6 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const { chromium } = require('playwright');
 const { webrtcArgs, validateProfile } = require('./fingerprint');
 const { resolveProxy, inlineRecord } = require('./proxyconfig');
 const { ProxyStore } = require('./proxystore');
@@ -109,40 +110,44 @@ class BrowserManager {
         proxyServerArg = `${scheme}://${host}:${proxyRecord.port}`;
       }
 
-      // 检索本地官方 Google Chrome
-      const isWin = process.platform === 'win32';
-      const winCandidates = [
+      // 仅使用 CIKE 目录内或 Playwright 自带的独立 Chromium，坚决不触碰电脑系统 Chrome
+      const isolatedCandidates = [
         process.env.LFB_CHROMIUM_EXECUTABLE,
-        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-        path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
         path.join(this.store.dataDir, 'chromium', 'chrome.exe'),
-        path.join(this.store.dataDir, 'browsers', 'chromium', 'chrome.exe')
+        path.join(this.store.dataDir, 'chromium-1148', 'chrome.exe'),
+        path.join(this.store.dataDir, 'browsers', 'chromium', 'chrome.exe'),
+        path.join(this.store.dataDir, 'browsers', 'chromium-1148', 'chrome.exe')
       ];
 
       let executablePath = null;
-      if (isWin) {
-        for (const candidate of winCandidates) {
-          if (candidate && fs.existsSync(candidate)) {
-            executablePath = candidate;
-            break;
-          }
+      for (const candidate of isolatedCandidates) {
+        if (candidate && fs.existsSync(candidate)) {
+          executablePath = candidate;
+          break;
         }
-      } else if (process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
-        executablePath = process.env.LFB_CHROMIUM_EXECUTABLE;
       }
 
+      // 如果应用数据目录内没有放独立包，直接调用 playwright 自带的独立 chromium 内核二进制
       if (!executablePath) {
-        throw new Error('未检测到可用的 Chrome 可执行文件，请确认已安装官方 Google Chrome');
+        try {
+          executablePath = chromium.executablePath();
+        } catch (_) {}
       }
 
-      const directory = this.store.profileDir(id);
+      if (!executablePath || !fs.existsSync(executablePath)) {
+        throw new Error('未找到内置的 Chromium 执行文件，请确认运行时包已下载完整');
+      }
+
+      const directory = path.resolve(this.store.profileDir(id));
       privateDirectory(directory);
       await prepareDownloads(directory, this.downloadsDirectory);
 
-      // 构造纯原生启动参数：不加载任何调试协议与自动化标记
+      const targetUrl = 'https://iphey.com';
+
+      // 独立拉起参数：完全隔离数据、隔离单实例、不挂载任何自动化探针
       const chromeArgs = [
         `--user-data-dir=${directory}`,
+        '--new-window',
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-component-update',
@@ -153,7 +158,8 @@ class BrowserManager {
         '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
         ...(proxyServerArg ? [`--proxy-server=${proxyServerArg}`] : []),
         ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
-        ...webrtcArgs({ ...effective, proxy: proxyRecord || useSystemProxy || profile.webrtc === 'auto' })
+        ...webrtcArgs({ ...effective, proxy: proxyRecord || useSystemProxy || profile.webrtc === 'auto' }),
+        targetUrl
       ];
 
       if (effective.viewport?.width && effective.viewport?.height) {
@@ -162,15 +168,16 @@ class BrowserManager {
 
       checkCancelled();
 
-      // 脱钩拉起独立浏览器进程
       const spawnEnv = { ...process.env };
       if (effective.timezone && effective.timezone !== 'auto') {
         spawnEnv.TZ = effective.timezone;
       }
 
+      // 脱离控制端完全独立启动，不注入任何 CDP 管道
       const child = spawn(executablePath, chromeArgs, {
         detached: true,
         stdio: 'ignore',
+        windowsHide: false,
         env: spawnEnv
       });
 
