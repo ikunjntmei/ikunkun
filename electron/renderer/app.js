@@ -436,7 +436,7 @@ function openProfileModal(existing) {
       <div class="field-row">
         <div class="field"><label>WebRTC</label><select id="f-webrtc" class="input">
           <option value="auto" ${!p.webrtc || p.webrtc === 'auto' ? 'selected' : ''}>自动（限制直连 UDP）</option>
-          <option value="default" ${p.webrtc === 'default' ? 'selected' : ''}>默认</option>
+          <option value="default" ${p.webrtc === 'default' ? 'selected' : ''}>不限制（不建议选）</option>
           <option value="restricted" ${['restricted', 'disabled'].includes(p.webrtc) ? 'selected' : ''}>限制直连 UDP（可能影响通话）</option>
         </select></div>
       </div>
