@@ -123,7 +123,6 @@ class BrowserManager {
         };
       }
 
-      // 提取 profile 选项，并保留规范的代理对象
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
       
@@ -135,6 +134,7 @@ class BrowserManager {
         '--site-per-process',
         '--disable-background-mode',
         '--disable-blink-features=AutomationControlled',
+        '--exclude-switches=enable-automation',
         '--disable-infobars',
         // 彻底切断 WebRTC 本地网络泄露
         '--enforce-webrtc-ip-permission-check',
@@ -147,10 +147,10 @@ class BrowserManager {
 
       const launchOptions = {
         ...options,
-        proxy: proxy || undefined, // Playwright 上下文必须持有规范 proxy 对象
+        proxy: proxy || undefined,
         headless,
         chromiumSandbox: true,
-        ignoreDefaultArgs: ['--enable-automation'],
+        ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
           ...extraArgs,
           ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
@@ -194,38 +194,54 @@ class BrowserManager {
       privateDirectory(directory);
       await prepareDownloads(directory, this.downloadsDirectory);
 
-      // 启动 Persistent Context
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // --- 关键：最前置注入防检测脚本，并清理 Playwright 特征 ---
+      // --- 防自动化与指纹深度擦除注入 ---
       await context.addInitScript(() => {
-        // 1. 删除 navigator.webdriver 使得它返回 undefined，与真实 Chrome 行为完全一致
+        // 1. 原型链原生化：彻底擦除 Navigator 原型上的 webdriver 属性描述符
         try {
-          const newProto = navigator.__proto__;
-          delete newProto.webdriver;
+          const descriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+          if (descriptor) {
+            delete Navigator.prototype.webdriver;
+          }
         } catch (_) {}
 
-        // 2. 伪造真实 Chrome 的全局对象与运行时
+        try {
+          delete Object.getPrototypeOf(navigator).webdriver;
+        } catch (_) {}
+
+        // 2. 清洗可能由 CDP/测试驱动留下的全局自动化变量 (jungle 识别关键)
+        const cleanAutomationGlobals = () => {
+          const sensitivePatterns = ['cdc_', 'playwright', 'pw_'];
+          for (const key of Object.getOwnPropertyNames(window)) {
+            if (sensitivePatterns.some(p => key.includes(p))) {
+              try { delete window[key]; } catch (_) {}
+            }
+          }
+          for (const key of Object.getOwnPropertyNames(document)) {
+            if (sensitivePatterns.some(p => key.includes(p))) {
+              try { delete document[key]; } catch (_) {}
+            }
+          }
+        };
+        cleanAutomationGlobals();
+
+        // 3. 规范化补齐真实 Chrome 对象
         if (!window.chrome) {
           window.chrome = {};
         }
-        window.chrome.app = { isInstalled: false };
+        window.chrome.app = {
+          isInstalled: false,
+          InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+          RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' }
+        };
         window.chrome.runtime = {
+          OnInstalledReason: { INSTALL: 'install' },
           PlatformArch: { X86_64: 'x86-64' },
-          PlatformOs: { WIN: 'win' },
-          OnInstalledReason: { INSTALL: 'install' }
+          PlatformOs: { WIN: 'win' }
         };
 
-        // 3. 伪造插件列表（Playwright 默认为空，容易被判定为自动化）
-        try {
-          Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-            enumerable: true,
-            configurable: true
-          });
-        } catch (_) {}
-
-        // 4. 清理 WebRTC 对象，防止 UDP 探测真实 IP
+        // 4. 清除 WebRTC 对象避免 UDP 泄露真实物理网络
         try {
           delete window.RTCPeerConnection;
           delete window.webkitRTCPeerConnection;
@@ -234,12 +250,12 @@ class BrowserManager {
         } catch (_) {}
       });
 
-      // 关键：给首次启动自动创建的已有页面补打补丁，并刷新页面以生效防检测
-      const existingPages = context.pages();
-      for (const page of existingPages) {
+      // 针对已有页面同样执行擦除
+      for (const page of context.pages()) {
         await page.evaluate(() => {
           try {
-            delete navigator.__proto__.webdriver;
+            delete Navigator.prototype.webdriver;
+            delete Object.getPrototypeOf(navigator).webdriver;
           } catch (_) {}
         }).catch(() => {});
       }
