@@ -4,9 +4,6 @@
 
 <h1 align="center">IKUN</h1>
 
-<p align="center">本地多环境浏览器 · 独立会话 · 代理管理 · 自动化 API</p>
-
-
 
 IKUN 是基于 Electron、Chromium 和 Playwright 的本地多环境浏览器。你可以为不同任务创建独立浏览器环境，分别保存登录状态、配置代理和浏览器参数，也可以通过本地 API 接入自动化脚本。
 
