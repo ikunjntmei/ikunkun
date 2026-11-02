@@ -116,7 +116,8 @@ class ProfileStore {
     delete this.profiles[id];
     try { this._save(); } catch (error) { this.profiles[id] = rec; throw error; }
     fs.rmSync(this.profileDir(id), { recursive: true, force: true });
-    const app = path.join(require('./profileapp').appsRoot(this.dataDir), `CIKE-${rec.sequence}-${id}.app`);
+    // 清理生成的独立应用副本，与 profileapp.js 对应的 IKUN 前缀保持一致
+    const app = path.join(require('./profileapp').appsRoot(this.dataDir), `IKUN-${rec.sequence}-${id}.app`);
     fs.rmSync(app, { recursive: true, force: true });
     fs.rmSync(app + '.json', { force: true });
     return true;
