@@ -1,11 +1,11 @@
 'use strict';
 
-const START_ORIGIN = 'https://start.cike.invalid';
+const START_ORIGIN = 'https://start.ikun.invalid';
 
 async function openStartPage(context, profile, network, onResult) {
   const page = context.pages()[0] || await context.newPage();
 
-  const title = profile.name || 'CIKE 独立环境';
+  const title = profile.name || 'IKUN 独立环境';
   const routeText = network.route === 'proxy' ? '代理连接 (Proxy)' : '系统默认网络';
   const exitIpText = network.exitIp || '检测中 / 本地';
 
