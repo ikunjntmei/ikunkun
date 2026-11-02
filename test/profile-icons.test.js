@@ -28,14 +28,14 @@ function run(args) {
     return $.NSBitmapImageRep.imageRepWithData(canvas.TIFFRepresentation).representationUsingTypeProperties($.NSBitmapImageFileTypePNG,$({}));
   }
   const actual=render(app.icon);
-  const expected=render($.NSImage.alloc.initWithContentsOfFile(args[0]+'/Contents/Resources/cike-profile.icns'));
+  const expected=render($.NSImage.alloc.initWithContentsOfFile(args[0]+'/Contents/Resources/ikun-profile.icns'));
   actual.writeToFileAtomically(args[1],true);
   expected.writeToFileAtomically(args[2],true);
   // macOS can apply color management and a padded glass frame to ICNS icons.
   // Compare the colored logo/number pixels across possible system scales;
   // neutral backgrounds and transparent padding are not branding evidence.
   const a=$.NSBitmapImageRep.imageRepWithData(actual);
-  const source=$.NSImage.alloc.initWithContentsOfFile(args[0]+'/Contents/Resources/cike-profile.icns');
+  const source=$.NSImage.alloc.initWithContentsOfFile(args[0]+'/Contents/Resources/ikun-profile.icns');
   let meanError=1;
   for (let scale=0.6;scale<=1.001;scale+=0.025) {
     const b=$.NSBitmapImageRep.imageRepWithData(render(source,scale));
@@ -55,24 +55,24 @@ function run(args) {
   return JSON.stringify({ matches: meanError < 0.12, meanError, opaqueCanvas });
 }`;
 
-test('macOS running application icon uses the numbered CIKE ICNS instead of the CfT catalog', { skip: process.platform !== 'darwin', timeout: 60000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cike-dock-icons-'));
+test('macOS running application icon uses the numbered IKUN ICNS instead of the CfT catalog', { skip: process.platform !== 'darwin', timeout: 60000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-dock-icons-'));
   const store = new ProfileStore(dir);
   const manager = new BrowserManager(store, null, null, { startPage: false, downloadsDirectory: path.join(dir, 'downloads') });
   try {
     store.sequence = 124; // Check a realistic three-digit Dock label.
     const profile = store.create({ name: 'Dock icon regression' });
     await manager.open(profile.id);
-    const bundle = path.join(dir, 'browsers/apps', `CIKE-${profile.sequence}-${profile.id}.app`);
+    const bundle = path.join(dir, 'browsers/apps', `IKUN-${profile.sequence}-${profile.id}.app`);
     const { stdout: json } = await exec('/usr/bin/plutil', ['-convert','json','-o','-',path.join(bundle,'Contents/Info.plist')]);
     const info = JSON.parse(json);
     assert.equal(info.CFBundleIconName, undefined);
-    assert.equal(info.CFBundleIconFile, 'cike-profile.icns');
-    const actual = process.env.CIKE_ICON_EVIDENCE || path.join(dir,'runtime-icon.png');
+    assert.equal(info.CFBundleIconFile, 'ikun-profile.icns');
+    const actual = process.env.IKUN_ICON_EVIDENCE || path.join(dir,'runtime-icon.png');
     const { stdout } = await exec('/usr/bin/osascript', ['-l','JavaScript','-e',inspectRuntimeIcon,bundle,actual,actual+'.expected.png']);
     const result = JSON.parse(stdout);
-    assert.equal(result.matches, true, `The running application must display the numbered CIKE icon (mean pixel error ${result.meanError})`);
-    assert.equal(info.CFBundleDisplayName, `CIKE #${profile.sequence}`);
+    assert.equal(result.matches, true, `The running application must display the numbered IKUN icon (mean pixel error ${result.meanError})`);
+    assert.equal(info.CFBundleDisplayName, `IKUN #${profile.sequence}`);
     assert.equal(result.opaqueCanvas, true, 'The icon canvas must be opaque edge-to-edge, with no inset tile or transparent border');
     await manager.close(profile.id);
     // Simulate a cached pre-fix clone. It must be regenerated automatically.
