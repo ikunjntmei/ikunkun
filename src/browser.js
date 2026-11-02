@@ -130,7 +130,6 @@ class BrowserManager {
         ],
       };
 
-      // 适配 Windows 内核路径查找与回退机制
       const isWin = process.platform === 'win32';
       const winCandidates = [
         process.env.LFB_CHROMIUM_EXECUTABLE,
@@ -153,6 +152,88 @@ class BrowserManager {
 
       checkCancelled();
 
-      // profileapp 属于 macOS 特性，Windows 环境下直接跳过
       if (!headless && this.profileIcons && !isWin) {
-        launchOptions.executable
+        launchOptions.executablePath = await require('./profileapp').ensureProfileApp(
+          this.store.dataDir,
+          profile,
+          launchOptions.executablePath || chromium.executablePath()
+        );
+        checkCancelled();
+      }
+
+      const directory = this.store.profileDir(id);
+      privateDirectory(directory);
+      await prepareDownloads(directory, this.downloadsDirectory);
+      context = await chromium.launchPersistentContext(directory, launchOptions);
+      await configureDownloads(context);
+      checkCancelled();
+
+      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
+      this.sessions.set(id, session);
+
+      context.on('close', () => {
+        if (this.sessions.get(id) === session) this.sessions.delete(id);
+        forwarder?.stop().catch(() => {});
+      });
+
+      const watchPage = page => page.on('close', () => {
+        if (!context.pages().some(p => !p.isClosed()) && this.sessions.get(id) === session) {
+          this.close(id).catch(() => {});
+        }
+      });
+
+      context.on('page', watchPage);
+      for (const page of context.pages()) watchPage(page);
+
+      if (!headless && this.startPage) {
+        await require('./startpage').openStartPage(context, profile, network, ip => {
+          if (this.sessions.get(id) !== session) return;
+          session.network = { ...session.network, exitIp: ip, checkedAt: new Date().toISOString() };
+          this.store.recordNetwork(id, session.network);
+        });
+      }
+
+      checkCancelled();
+      this.store.recordOpened(id, session.network);
+      return {
+        profile_id: id,
+        open: true,
+        reused: false,
+        headless,
+        network,
+        ...(debugPort ? { debug_url: `http://127.0.0.1:${debugPort}` } : {})
+      };
+    } catch (error) {
+      await context?.close().catch(() => {});
+      await forwarder?.stop().catch(() => {});
+      throw error;
+    }
+  }
+
+  async close(id) {
+    if (this.closing.has(id)) return this.closing.get(id);
+    this.cancelled.add(id);
+    const pending = (async () => {
+      await this.opening.get(id)?.catch(() => {});
+      const session = this.sessions.get(id);
+      if (session) {
+        await session.context.close();
+        await session.forwarder?.stop();
+        if (this.sessions.get(id) === session) this.sessions.delete(id);
+      }
+      return { profile_id: id, open: false };
+    })();
+    this.closing.set(id, pending);
+    try { return await pending; } finally { this.closing.delete(id); this.cancelled.delete(id); }
+  }
+
+  async closeAll() {
+    const ids = [...new Set([...this.opening.keys(), ...this.sessions.keys()])];
+    await Promise.all(ids.map(id => this.close(id)));
+    return { closed: ids.length };
+  }
+
+  getContext(id) { return this.sessions.get(id)?.context || null; }
+}
+
+module.exports = { BrowserManager };
