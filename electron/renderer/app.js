@@ -753,11 +753,17 @@ async function loadSettings() {
   document.getElementById('set-socks-system-proxy').value = settings.socksViaSystemProxy ? 'yes' : 'no';
   document.getElementById('set-api-url').value = apiBase() + '/';
   document.getElementById('set-api-token').value = token();
-  try {
-    const { version, name } = await api('/api/getVersion');
-    document.getElementById('about-box').innerHTML =
-      `<div><strong>${esc(name)}</strong> ${esc(version)}</div><div class="sub">本地环境 · 本地代理 · 无厂商后端</div>`;
-  } catch { /* ignore */ }
+  
+  // 彻底隐藏关于一栏，安全清空容器内容
+  const aboutBox = document.getElementById('about-box');
+  if (aboutBox) {
+    aboutBox.innerHTML = '';
+    const aboutCard = aboutBox.closest('.card');
+    if (aboutCard) {
+      aboutCard.style.display = 'none';
+    }
+  }
+  
   await refreshChromiumStatus();
 }
 
