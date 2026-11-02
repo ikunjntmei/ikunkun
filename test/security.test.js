@@ -10,7 +10,7 @@ const { ProxyStore } = require('../src/proxystore');
 const { BrowserManager } = require('../src/browser');
 const { buildBackend } = require('../src/server');
 const { HOST_PLATFORM } = require('../src/fingerprint');
-const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cike-security-'));
+const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-security-'));
 const provider = { encrypt: s => Buffer.from(s).toString('base64'), decrypt: s => Buffer.from(s, 'base64').toString() }; // codec fixture, not production encryption
 
 test('legacy migration is explicit, credentials stay private, corrupt data fails closed', async () => {
