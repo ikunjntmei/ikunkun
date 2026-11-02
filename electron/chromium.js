@@ -63,6 +63,23 @@ async function chromiumStatus(dir) {
     }
 
     if (executable && fs.existsSync(executable)) {
+      // Windows 平台：使用 PowerShell 静态读取文件版本属性，禁止唤起进程
+      if (process.platform === 'win32') {
+        try {
+          const { stdout } = await exec('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `(Get-Item -LiteralPath '${executable}').VersionInfo.FileVersion`
+          ], { timeout: 3000, windowsHide: true });
+          const version = stdout.trim().match(/\d+\.\d+\.\d+\.\d+/)?.[0] || targetVersion;
+          return { installed: true, executable, version, targetVersion, updateAvailable: false };
+        } catch {
+          return { installed: true, executable, version: targetVersion, targetVersion, updateAvailable: false };
+        }
+      }
+
+      // Mac / Linux 平台安全检查
       try {
         const { stdout } = await exec(executable, ['--version'], { 
           timeout: 5000, 
@@ -75,10 +92,7 @@ async function chromiumStatus(dir) {
           return { installed: true, executable, version, targetVersion, updateAvailable: false };
         }
       } catch {
-        // Windows 下 chrome.exe --version 即使输出管道中断错误，只要文件存在即认定安装成功
-        if (process.platform === 'win32') {
-          return { installed: true, executable, version: targetVersion, targetVersion, updateAvailable: false };
-        }
+        /* fallback */
       }
     }
   } catch { /* not installed or unusable */ }
@@ -88,7 +102,6 @@ async function chromiumStatus(dir) {
 async function downloadFile(url, dest, onProgress, redirects = 0) {
   if (redirects > 5 || new URL(url).protocol !== 'https:') throw new Error('内核下载必须使用 HTTPS，且不能无限重定向');
   const response = await new Promise((resolve, reject) => {
-    // 替换 User-Agent 为 IKUN
     const req = https.get(url, { headers: { 'User-Agent': 'IKUN' } }, resolve);
     req.on('error', reject);
     req.setTimeout(120000, () => req.destroy(new Error('内核下载超时')));
@@ -130,7 +143,6 @@ async function install(dir, onProgress) {
   const status = await chromiumStatus(dir);
   if (status.installed && !status.updateAvailable) return status.executable;
   privateDirectory(browserRoot(dir));
-  // 临时目录前缀修改为 ikun-chromium-
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-chromium-'));
   const staging = fs.mkdtempSync(path.join(browserRoot(dir), '.install-'));
   let renameSuccess = false;
@@ -153,19 +165,20 @@ async function install(dir, onProgress) {
     const executable = findExecutable(staging);
     if (!executable) throw new Error('安装包中没有 Chromium');
 
-    try {
-      const { stdout } = await exec(executable, ['--version'], { 
-        timeout: 10000, 
-        windowsHide: true,
-        env: { ...process.env, CHROME_HEADLESS: '1' }
-      });
-      if (!stdout.includes(chromiumEntry().browserVersion)) throw new Error('下载的内核版本不匹配');
-    } catch (err) {
-      if (process.platform !== 'win32') throw err;
-    }
-
+    // Windows 安装验证同样静默读取，不再调用 exe 避免弹窗
     if (process.platform === 'win32') {
       await sleep(300);
+    } else {
+      try {
+        const { stdout } = await exec(executable, ['--version'], { 
+          timeout: 10000, 
+          windowsHide: true,
+          env: { ...process.env, CHROME_HEADLESS: '1' }
+        });
+        if (!stdout.includes(chromiumEntry().browserVersion)) throw new Error('下载的内核版本不匹配');
+      } catch (err) {
+        throw err;
+      }
     }
 
     const suffix = path.basename(staging).replace(/^\.install-?/, '') || Date.now().toString(36);
