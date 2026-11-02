@@ -425,7 +425,7 @@ function openProfileModal(existing) {
       </div>
       <div class="field"><label>密码</label><input id="f-ppass" class="input" type="password"></div>
     </div>
-    <details class="advanced"><summary>指纹选项</summary>
+    <details class="advanced" open><summary>指纹选项</summary>
       <div class="field-row" style="margin-top:10px">
         <div class="field"><label>语言</label><select id="f-locale" class="input">${locales.map((l) => `<option value="${esc(l)}" ${((p.locale || 'auto') === l) ? 'selected' : ''}>${l === 'auto' ? TIMEZONE_LABELS.auto : esc(l)}</option>`).join('')}</select></div>
         <div class="field"><label>时区</label><select id="f-tz" class="input">${timezones.map((t) => `<option value="${esc(t)}" ${((p.timezone || 'auto') === t) ? 'selected' : ''}>${TIMEZONE_LABELS[t] || esc(t)}</option>`).join('')}</select></div>
