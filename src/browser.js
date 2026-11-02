@@ -108,26 +108,44 @@ class BrowserManager {
         const { SocksForwarder } = require('./socksfwd');
         const systemProxy = useSystemProxy ? await this.settings.route(proxyRecord.host, proxyRecord.port) : null;
         forwarder = await SocksForwarder.start({ ...proxyRecord, systemProxy });
-        proxy = { server: `http://127.0.0.1:${forwarder.port}`, bypass: '<-loopback>' };
-      } else if (proxy) proxy.bypass = '<-loopback>';
+        // 修复：移除导致全局流量直连的 <-loopback> 绕过规则
+        proxy = { server: `http://127.0.0.1:${forwarder.port}` };
+      } else if (proxy) {
+        // 修复：确保清除有问题的 bypass
+        delete proxy.bypass;
+      }
 
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
+      
+      const extraArgs = [
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--check-for-update-interval=31536000',
+        '--disable-component-update',
+        '--site-per-process',
+        '--disable-background-mode',
+        '--disable-blink-features=AutomationControlled',
+        '--test-type',
+        '--disable-infobars',
+        // 强制阻断 WebRTC 本地直连 UDP，避免物理 IP 泄露
+        '--enforce-webrtc-ip-permission-check',
+        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+      ];
+
+      // 显式在启动参数中注入代理服务器地址
+      if (proxy?.server) {
+        extraArgs.push(`--proxy-server=${proxy.server}`);
+      }
+
       const launchOptions = {
         ...options,
+        proxy, // 保留 Playwright 选项代理
         headless,
         chromiumSandbox: true,
         ignoreDefaultArgs: ['--enable-automation'],
         args: [
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--check-for-update-interval=31536000',
-          '--disable-component-update',
-          '--site-per-process',
-          '--disable-background-mode',
-          '--disable-blink-features=AutomationControlled',
-          '--test-type',
-          '--disable-infobars',
+          ...extraArgs,
           ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
@@ -197,6 +215,14 @@ class BrowserManager {
               : originalQuery(parameters)
           );
         }
+
+        // 4. 彻底禁用前端 WebRTC 对象，杜绝一切 P2P 穿透泄露物理 IP
+        try {
+          delete window.RTCPeerConnection;
+          delete window.webkitRTCPeerConnection;
+          delete window.RTCSessionDescription;
+          delete window.RTCIceCandidate;
+        } catch (_) {}
       });
 
       checkCancelled();
