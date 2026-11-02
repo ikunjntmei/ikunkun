@@ -124,27 +124,6 @@ function initTray(iconPath) {
   });
 }
 
-// 设置自定义顶层菜单：左上角仅保留「菜单」->「最小化到托盘」
-function setupAppMenu() {
-  const template = [
-    {
-      label: '菜单',
-      submenu: [
-        {
-          label: '最小化到托盘',
-          accelerator: 'CmdOrCtrl+M',
-          click: () => {
-            if (mainWindow) mainWindow.hide();
-          }
-        }
-      ]
-    }
-  ];
-
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
-}
-
 async function createWindow() {
   const iconPath = getAppIconPath();
 
@@ -178,7 +157,8 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  setupAppMenu();
+  // 移除原生小菜单栏，保持界面清爽现代
+  Menu.setApplicationMenu(null);
   applyChromiumEnv();
 
   try {
@@ -232,6 +212,12 @@ app.on('before-quit', event => {
 function handle(channel, callback) {
   ipcMain.handle(channel, (event, ...args) => { trusted(event); return callback(event, ...args); });
 }
+
+// 侧边栏“最小化到托盘”通道
+handle('minimize-to-tray', () => {
+  if (mainWindow) mainWindow.hide();
+  return { ok: true };
+});
 
 handle('chromium-status', async () => {
   return chromiumStatus(DATA_DIR);
