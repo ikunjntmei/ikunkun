@@ -88,7 +88,8 @@ async function chromiumStatus(dir) {
 async function downloadFile(url, dest, onProgress, redirects = 0) {
   if (redirects > 5 || new URL(url).protocol !== 'https:') throw new Error('内核下载必须使用 HTTPS，且不能无限重定向');
   const response = await new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'CIKE' } }, resolve);
+    // 替换 User-Agent 为 IKUN
+    const req = https.get(url, { headers: { 'User-Agent': 'IKUN' } }, resolve);
     req.on('error', reject);
     req.setTimeout(120000, () => req.destroy(new Error('内核下载超时')));
   });
@@ -129,7 +130,8 @@ async function install(dir, onProgress) {
   const status = await chromiumStatus(dir);
   if (status.installed && !status.updateAvailable) return status.executable;
   privateDirectory(browserRoot(dir));
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cike-chromium-'));
+  // 临时目录前缀修改为 ikun-chromium-
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-chromium-'));
   const staging = fs.mkdtempSync(path.join(browserRoot(dir), '.install-'));
   let renameSuccess = false;
 
