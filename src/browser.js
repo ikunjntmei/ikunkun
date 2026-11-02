@@ -106,9 +106,11 @@ class BrowserManager {
         const { SocksForwarder } = require('./socksfwd');
         const systemProxy = useSystemProxy ? await this.settings.route(proxyRecord.host, proxyRecord.port) : null;
         forwarder = await SocksForwarder.start({ ...proxyRecord, systemProxy });
-        proxy = { server: `http://127.0.0.1:${forwarder.port}`, bypass: '<-loopback>' };
+        // 关键改动：显式增加 bypass 参数，确保 127.0.0.1 的流量永远不被 Socks 转发器拦截
+        proxy = { server: `http://127.0.0.1:${forwarder.port}`, bypass: '127.0.0.1,localhost,<-loopback>' };
       } else if (proxy) {
-        proxy.bypass = '<-loopback>';
+        // 确保默认代理同样彻底绕过本地，避免 127/localhost 回环报错
+        proxy.bypass = '127.0.0.1,localhost,<-loopback>';
       }
 
       const { options } = buildContextOptions({ ...effective, proxy });
@@ -118,7 +120,6 @@ class BrowserManager {
         ...options,
         headless,
         chromiumSandbox: true,
-        // 关键改动 1：彻底过滤自动化与测试环境标记
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
           '--no-first-run',
@@ -130,6 +131,8 @@ class BrowserManager {
           '--disable-infobars',
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+          // 彻底对齐 Chromium 的 proxy-bypass 行为
+          '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
           ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
@@ -157,9 +160,8 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 关键改动 2：轻量级、无原型污染的原生特征对齐
+      // 原生特征隐身注入
       await context.addInitScript(() => {
-        // 抹除自动化驱动标记
         try {
           if (navigator.webdriver !== false) {
             Object.defineProperty(navigator, 'webdriver', {
@@ -169,7 +171,6 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 补齐 Chrome 专属 brands，避免 Chromium 双项特征暴露
         try {
           if (navigator.userAgentData) {
             const chromeMatch = navigator.userAgent.match(/Chrome\/(\d+)/);
@@ -186,7 +187,6 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 确保 WebRTC 接口存在且不出错
         try {
           if (typeof window.RTCPeerConnection !== 'undefined') {
             const NativeRTC = window.RTCPeerConnection;
@@ -198,7 +198,6 @@ class BrowserManager {
           }
         } catch (_) {}
 
-        // 拦截反爬探针利用 console.debug 触发 CDP 序列化探测
         try {
           const originalDebug = console.debug;
           console.debug = function (...args) {
