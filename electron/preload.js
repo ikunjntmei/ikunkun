@@ -7,6 +7,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const connection = ipcRenderer.sendSync('connection-info');
 contextBridge.exposeInMainWorld('lfb', {
+  minimizeToTray: () => ipcRenderer.invoke('minimize-to-tray'),
   apiBase: connection.apiBase || '',
   token: connection.token || '',
   readProxyClipboard: () => ipcRenderer.invoke('proxy-clipboard'),
