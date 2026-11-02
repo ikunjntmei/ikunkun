@@ -225,5 +225,33 @@
   <div id="toast-root"></div>
 
   <script src="app.js"></script>
+  <script>
+    // 监听左下角版本节点，剔除两处 0.7.0 并清理第二行开头残留的分隔符与空白
+    (function() {
+      const footEl = document.getElementById('app-version');
+      if (!footEl) return;
+      let isUpdating = false;
+
+      const clean = () => {
+        if (isUpdating) return;
+        const currentHtml = footEl.innerHTML;
+        if (currentHtml.includes('0.7.0')) {
+          isUpdating = true;
+          footEl.innerHTML = currentHtml
+            // 剔除两处 0.7.0 版本号
+            .replaceAll('0.7.0', '')
+            // 清理第一行 IKUN 后面多余的空白或 nbsp
+            .replace(/(IKUN)(?:\s|&nbsp;)+/g, '$1 ')
+            // 清理第二行开头残留的竖线、斜杠、连字符及周围空白
+            .replace(/(<[^>]+>)\s*([\|\-\/·]\s*)+/g, '$1')
+            .trim();
+          isUpdating = false;
+        }
+      };
+
+      new MutationObserver(clean).observe(footEl, { childList: true, subtree: true, characterData: true });
+      clean();
+    })();
+  </script>
 </body>
 </html>
