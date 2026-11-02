@@ -8,7 +8,7 @@ const http = require('http');
 const { buildBackend } = require('../src/server');
 
 test('Chromium downloads keep real paths, filenames and contents after closing profiles', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cike-download-test-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ikun-download-test-'));
   const directory = path.join(root, 'Downloads');
   const server = http.createServer((req, res) => {
     if (req.url === '/file') {
