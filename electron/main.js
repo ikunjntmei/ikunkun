@@ -48,4 +48,128 @@ function applyChromiumEnv() {
     if (process.platform === 'win32') {
       const candidates = [
         path.join(DATA_DIR, 'chromium', 'chrome.exe'),
-        path.join(DATA_DIR, 'chromium-1148
+        path.join(DATA_DIR, 'chromium-1148', 'chrome.exe'),
+        path.join(browserRoot(DATA_DIR), 'chromium', 'chrome.exe'),
+        path.join(browserRoot(DATA_DIR), 'chromium-1148', 'chrome.exe')
+      ];
+      for (const cand of candidates) {
+        if (fs.existsSync(cand)) {
+          process.env.LFB_CHROMIUM_EXECUTABLE = cand;
+          try {
+            const { privateDirectory, writePrivate } = require('../src/privatefiles');
+            privateDirectory(browserRoot(DATA_DIR));
+            writePrivate(marker, cand + '\n');
+          } catch { /* 容错忽略 */ }
+          break;
+        }
+      }
+    }
+  } catch { /* not downloaded yet */ }
+}
+
+async function createWindow() {
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+
+  mainWindow = new BrowserWindow({
+    width: 1240,
+    height: 820,
+    minWidth: 960,
+    minHeight: 640,
+    title: 'CIKE',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== uiURL) event.preventDefault(); });
+  mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  await mainWindow.loadFile(uiFile);
+}
+
+app.whenReady().then(async () => {
+  applyChromiumEnv();
+  try {
+    const requireSafeStorage = () => {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储不可用，无法安全读取或迁移代理凭据');
+    };
+    backend = await startBackend(undefined, {
+      secretStorage: {
+        encrypt: value => { requireSafeStorage(); return safeStorage.encryptString(value).toString('base64'); },
+        decrypt: value => { requireSafeStorage(); return safeStorage.decryptString(Buffer.from(value, 'base64')); },
+      },
+      resolveSystemProxy: url => session.defaultSession.resolveProxy(url),
+      downloadsDirectory: app.getPath('downloads'),
+    });
+  } catch (err) {
+    console.error('[CIKE] backend failed to start:', err.message);
+    dialog.showErrorBox('CIKE 无法启动', err.message);
+    app.exit(1);
+    return;
+  }
+  await createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+
+let quitting = false;
+app.on('before-quit', event => {
+  if (quitting || !backend) return;
+  event.preventDefault();
+  quitting = true;
+
+  // 设置 3 秒安全退出兜底，防止有未退出的环境导致应用托盘残留
+  const timer = setTimeout(() => { app.exit(0); }, 3000);
+
+  backend.browsers.closeAll().finally(() => {
+    clearTimeout(timer);
+    backend.server?.close?.();
+    app.quit();
+  });
+});
+
+// --- renderer IPC ---
+
+function handle(channel, callback) {
+  ipcMain.handle(channel, (event, ...args) => { trusted(event); return callback(event, ...args); });
+}
+
+handle('chromium-status', async () => {
+  return chromiumStatus(DATA_DIR);
+});
+
+handle('chromium-download', async (event) => {
+  if (backend.browsers.listOpen().length || backend.browsers.opening.size) throw new Error('请先关闭所有环境再更新内核');
+  const send = (p) => event.sender.send('chromium-download-progress', p);
+  try {
+    const exe = await downloadChromium(DATA_DIR, send);
+    process.env.LFB_CHROMIUM_EXECUTABLE = exe;
+    return { ok: true, executable: exe };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+handle('open-data-dir', async () => {
+  shell.openPath(backend.dataDir);
+  return { ok: true };
+});
+
+handle('proxy-clipboard', async () => {
+  try { return { ok: true, proxy: require('../src/proxyparse').parseProxyLine(await clipboard.readText()) }; }
+  catch { return { ok: false }; }
+});
+
+handle('update-check', () => checkUpdate());
+handle('update-install', () => installUpdate());
