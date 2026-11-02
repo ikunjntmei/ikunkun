@@ -1,5 +1,5 @@
 'use strict';
-/* CIKE 渲染层 — 基于 Local API 的单页应用 */
+/* IKUN 渲染层 — 基于 Local API 的单页应用 */
 
 const TIMEZONES = ['auto', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
   'Europe/London', 'Europe/Berlin', 'Europe/Moscow', 'Asia/Dubai', 'Asia/Shanghai',
@@ -853,7 +853,6 @@ document.getElementById('btn-open-data').onclick = () => window.lfb.openDataDir(
     state.chromium = await window.lfb.chromiumStatus();
   } catch { state.chromium = { installed: false }; }
   updateBanner();
-  // try { const { version } = await api('/api/getVersion'); document.getElementById('app-version').textContent = `v${version} · 本地运行`; } catch {}
   await loadProfiles();
   await loadProxies();
   showPage('profiles');
