@@ -170,6 +170,35 @@ class BrowserManager {
       await prepareDownloads(directory, this.downloadsDirectory);
       context = await chromium.launchPersistentContext(directory, launchOptions);
       await configureDownloads(context);
+
+      // --- 防自动化与指纹深度擦除注入 ---
+      await context.addInitScript(() => {
+        // 1. 彻底删除 navigator.webdriver 标识
+        Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+          get: () => undefined,
+          configurable: true,
+          enumerable: true
+        });
+
+        // 2. 模拟真实 Chrome 的 chrome.runtime 与插件对象
+        if (!window.chrome) {
+          window.chrome = {};
+        }
+        if (!window.chrome.runtime) {
+          window.chrome.runtime = {};
+        }
+
+        // 3. 修复 permissions 状态查询防止自动化泄露
+        const originalQuery = window.navigator.permissions?.query;
+        if (originalQuery) {
+          window.navigator.permissions.query = parameters => (
+            parameters.name === 'notifications'
+              ? Promise.resolve({ state: Notification.permission })
+              : originalQuery(parameters)
+          );
+        }
+      });
+
       checkCancelled();
 
       const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
