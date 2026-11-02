@@ -1,6 +1,6 @@
 'use strict';
 /**
- * CIKE — Electron shell.
+ * IKUN — Electron shell.
  * Main process starts the local backend (Koa API + profile/browser manager)
  * and hosts the management UI, which talks to the same Local API over HTTP.
  */
@@ -81,7 +81,7 @@ function initTray(iconPath) {
   if (!finalIcon) return;
 
   tray = new Tray(finalIcon);
-  tray.setToolTip('CIKE 环境管理');
+  tray.setToolTip('IKUN 环境管理');
 
   const trayMenu = Menu.buildFromTemplate([
     {
@@ -145,7 +145,7 @@ async function createWindow() {
     height: 820,
     minWidth: 960,
     minHeight: 640,
-    title: 'CIKE',
+    title: 'IKUN',
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -186,8 +186,8 @@ app.whenReady().then(async () => {
       downloadsDirectory: app.getPath('downloads'),
     });
   } catch (err) {
-    console.error('[CIKE] backend failed to start:', err.message);
-    dialog.showErrorBox('CIKE 无法启动', err.message);
+    console.error('[IKUN] backend failed to start:', err.message);
+    dialog.showErrorBox('IKUN 无法启动', err.message);
     app.exit(1);
     return;
   }
