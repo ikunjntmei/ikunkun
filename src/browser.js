@@ -1,5 +1,7 @@
 'use strict';
 const net = require('net');
+const path = require('path');
+const fs = require('fs');
 const { chromium } = require('playwright');
 const { buildContextOptions, webrtcArgs, validateProfile } = require('./fingerprint');
 const { resolveProxy, inlineRecord } = require('./proxyconfig');
@@ -20,6 +22,7 @@ function findFreePort(min, max) {
     next();
   });
 }
+
 class BrowserManager {
   constructor(store, proxyStore = null, settings = null, options = {}) {
     this.store = store;
@@ -34,12 +37,19 @@ class BrowserManager {
     this.startPage = options.startPage !== false;
     this.profileIcons = options.profileIcons !== false;
   }
+
   isOpen(id) { return this.sessions.has(id) || this.opening.has(id); }
+
   listOpen() {
-    return [...this.sessions].map(([id, s]) => ({ profile_id: id,
+    return [...this.sessions].map(([id, s]) => ({
+      profile_id: id,
       ...(s.debugPort ? { debug_url: `http://127.0.0.1:${s.debugPort}` } : {}),
-      headless: s.headless, opened_at: new Date(s.openedAt).toISOString(), network: s.network }));
+      headless: s.headless,
+      opened_at: new Date(s.openedAt).toISOString(),
+      network: s.network
+    }));
   }
+
   async open(id, options = {}) {
     if (this.closing.has(id)) await this.closing.get(id);
     if (this.opening.has(id)) return this.opening.get(id);
@@ -48,12 +58,14 @@ class BrowserManager {
     this.opening.set(id, pending);
     try { return await pending; } finally { this.opening.delete(id); }
   }
+
   async _open(id, { headless = false } = {}) {
     if (typeof headless !== 'boolean') throw Object.assign(new Error('headless 必须为布尔值'), { status: 400 });
     if (this.sessions.has(id)) return { profile_id: id, open: true, reused: true, ...this.listOpen().find(s => s.profile_id === id) };
     const profile = this.store.get(id);
     if (!profile) throw Object.assign(new Error('环境不存在'), { status: 404 });
     validateProfile(profile);
+
     const checkCancelled = () => { if (this.cancelled.has(id)) throw Object.assign(new Error('环境启动已取消'), { status: 409 }); };
     let proxyRecord = resolveProxy(profile, this.proxyStore);
     const useSystemProxy = this.settings?.get().socksViaSystemProxy === true;
@@ -61,12 +73,13 @@ class BrowserManager {
       const route = await this.settings.route();
       proxyRecord = inlineRecord({ server: `${route.scheme}://${route.host.includes(':') ? `[${route.host}]` : route.host}:${route.port}` });
     }
+
     const effective = { ...profile };
     let network = { route: proxyRecord ? 'proxy' : 'system', exitIp: null };
+
     if (proxyRecord) {
       const result = await this.checkProxy(proxyRecord, this.settings);
       checkCancelled();
-      // The check awaited external I/O: refuse stale/deleted/rebound settings.
       const current = this.store.get(id);
       if (!current || current.updatedAt !== profile.updatedAt ||
           ((profile.proxyId || profile.proxy) && JSON.stringify(resolveProxy(current, this.proxyStore)) !== JSON.stringify(proxyRecord))) {
@@ -86,10 +99,10 @@ class BrowserManager {
       }
       network = { route: 'proxy', exitIp: result.exitIp, checkedAt: new Date().toISOString(), timezone: effective.timezone, locale: effective.locale };
     }
-    // With no configured proxy, auto means native system locale/timezone;
-    // no geolocation request, and no invented America/New_York fallback.
+
     let proxy = proxyRecord ? ProxyStore.toPlaywright(proxyRecord) : null;
     let forwarder, context;
+
     try {
       if (proxyRecord?.type === 'socks5' && (proxyRecord.username || proxyRecord.password || useSystemProxy)) {
         const { SocksForwarder } = require('./socksfwd');
@@ -97,79 +110,49 @@ class BrowserManager {
         forwarder = await SocksForwarder.start({ ...proxyRecord, systemProxy });
         proxy = { server: `http://127.0.0.1:${forwarder.port}`, bypass: '<-loopback>' };
       } else if (proxy) proxy.bypass = '<-loopback>';
+
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
-      const launchOptions = { ...options, headless, chromiumSandbox: true,
+      const launchOptions = {
+        ...options,
+        headless,
+        chromiumSandbox: true,
         ignoreDefaultArgs: ['--enable-automation'],
-        args: ['--no-first-run', '--no-default-browser-check', '--site-per-process', '--disable-background-mode',
+        args: [
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--site-per-process',
+          '--disable-background-mode',
           '--disable-blink-features=AutomationControlled',
           ...(effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
       };
-      // Deliberately no arbitrary LFB_EXTRA_ARGS: they could disable sandbox,
-      // alter proxy routing or invalidate the native consistency contract.
-      if (process.env.LFB_CHROMIUM_EXECUTABLE) launchOptions.executablePath = process.env.LFB_CHROMIUM_EXECUTABLE;
-      checkCancelled();
-      if (!headless && this.profileIcons) {
-        launchOptions.executablePath = await require('./profileapp').ensureProfileApp(this.store.dataDir, profile, launchOptions.executablePath || chromium.executablePath());
-        checkCancelled();
+
+      // 适配 Windows 内核路径查找与回退机制
+      const isWin = process.platform === 'win32';
+      const winCandidates = [
+        process.env.LFB_CHROMIUM_EXECUTABLE,
+        path.join(this.store.dataDir, 'chromium', 'chrome.exe'),
+        path.join(this.store.dataDir, 'chromium-1148', 'chrome.exe'),
+        path.join(this.store.dataDir, 'browsers', 'chromium', 'chrome.exe'),
+        path.join(this.store.dataDir, 'browsers', 'chromium-1148', 'chrome.exe')
+      ];
+
+      if (isWin) {
+        for (const candidate of winCandidates) {
+          if (candidate && fs.existsSync(candidate)) {
+            launchOptions.executablePath = candidate;
+            break;
+          }
+        }
+      } else if (process.env.LFB_CHROMIUM_EXECUTABLE) {
+        launchOptions.executablePath = process.env.LFB_CHROMIUM_EXECUTABLE;
       }
-      const directory = this.store.profileDir(id);
-      privateDirectory(directory);
-      await prepareDownloads(directory, this.downloadsDirectory);
-      context = await chromium.launchPersistentContext(directory, launchOptions);
-      await configureDownloads(context);
+
       checkCancelled();
-      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
-      this.sessions.set(id, session);
-      context.on('close', () => { if (this.sessions.get(id) === session) this.sessions.delete(id); forwarder?.stop().catch(() => {}); });
-      const watchPage = page => page.on('close', () => {
-        // macOS leaves Chromium alive after its final window closes. Closing
-        // the persistent context terminates only this environment's process.
-        if (!context.pages().some(p => !p.isClosed()) && this.sessions.get(id) === session) this.close(id).catch(() => {});
-      });
-      context.on('page', watchPage);
-      for (const page of context.pages()) watchPage(page);
-      if (!headless && this.startPage) await require('./startpage').openStartPage(context, profile, network, ip => {
-        if (this.sessions.get(id) !== session) return;
-        session.network = { ...session.network, exitIp: ip, checkedAt: new Date().toISOString() };
-        this.store.recordNetwork(id, session.network);
-      });
-      checkCancelled();
-      this.store.recordOpened(id, session.network);
-      return { profile_id: id, open: true, reused: false, headless, network,
-        ...(debugPort ? { debug_url: `http://127.0.0.1:${debugPort}` } : {}) };
-    } catch (error) {
-      await context?.close().catch(() => {});
-      await forwarder?.stop().catch(() => {});
-      // Playwright launch errors include argv, but proxy credentials are not
-      // in argv. Do not retry by disabling sandbox or removing the proxy.
-      throw error;
-    }
-  }
-  async close(id) {
-    if (this.closing.has(id)) return this.closing.get(id);
-    this.cancelled.add(id);
-    const pending = (async () => {
-      await this.opening.get(id)?.catch(() => {});
-      const session = this.sessions.get(id);
-      if (session) {
-        await session.context.close();
-        await session.forwarder?.stop();
-        if (this.sessions.get(id) === session) this.sessions.delete(id);
-      }
-      return { profile_id: id, open: false };
-    })();
-    this.closing.set(id, pending);
-    try { return await pending; } finally { this.closing.delete(id); this.cancelled.delete(id); }
-  }
-  async closeAll() {
-    const ids = [...new Set([...this.opening.keys(), ...this.sessions.keys()])];
-    await Promise.all(ids.map(id => this.close(id)));
-    return { closed: ids.length };
-  }
-  getContext(id) { return this.sessions.get(id)?.context || null; }
-}
-module.exports = { BrowserManager };
+
+      // profileapp 属于 macOS 特性，Windows 环境下直接跳过
+      if (!headless && this.profileIcons && !isWin) {
+        launchOptions.executable
