@@ -1,10 +1,11 @@
 name: Build CIKE for Windows
 
 on:
-  workflow_dispatch:
   push:
+    branches: [ main, master ]
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,61 +22,31 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
 
       - name: Install dependencies
-        run: |
-          npm install --legacy-peer-deps
+        run: npm ci
 
       - name: Install electron-builder
-        run: |
-          npm install --save-dev electron-builder
+        run: npm install -D electron-builder
 
-      - name: Setup electron-builder config
-        shell: pwsh
-        run: |
-          $pkgPath = "package.json"
-          $pkg = Get-Content $pkgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+      - name: Build and Package Windows Executable
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          if (-not $pkg.main) {
-            $pkg | Add-Member -MemberType NoteProperty -Name "main" -Value "electron/main.js"
-          }
-
-          $buildConfig = @{
-            appId = "com.chainfix.cike"
-            productName = "CIKE"
-            directories = @{
-              output = "dist-win"
-            }
-            files = @(
-              "**/*",
-              "!dist-win/**",
-              "!.git/**"
-            )
-            win = @{
-              target = @("nsis", "portable")
-            }
-            nsis = @{
-              oneClick = $false
-              allowToChangeInstallationDirectory = $true
-            }
-          }
-
-          if ($pkg.build) {
-            $pkg.build = $buildConfig
-          } else {
-            $pkg | Add-Member -MemberType NoteProperty -Name "build" -Value $buildConfig
-          }
-
-          $pkg | ConvertTo-Json -Depth 10 | Set-Content $pkgPath -Encoding UTF8
-
-      - name: Build Windows Executables
-        run: |
-          npx electron-builder --win --x64 --publish never
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      # 这一步负责把打包出的 exe 和 blockmap 文件上传到 Release
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          name: CIKE-Windows-x64
-          path: |
-            dist-win/*.exe
-          retention-days: 14
+          name: CIKE Windows Release (${{ github.ref_name }})
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-windows' }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
