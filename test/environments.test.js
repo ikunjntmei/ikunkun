@@ -10,7 +10,7 @@ const { BrowserManager } = require('../src/browser');
 const { buildBackend } = require('../src/server');
 const { parseProxyLine } = require('../src/proxyparse');
 const { openStartPage, START_ORIGIN } = require('../src/startpage');
-const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cike-environments-'));
+const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ikun-environments-'));
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 test('whole proxy lines support credentials, encoded URLs and IPv6 without silently accepting incomplete fields', () => {
@@ -54,13 +54,13 @@ test('closing last window terminates only that environment; timestamps persist a
     await manager.open(a.id,{headless}); assert.equal(store.get(a.id).lastOpenedAt,first);
     if (!headless) {
       for (const p of [a,b]) {
-        const bundle = path.join(dir,'browsers/apps',`CIKE-${p.sequence}-${p.id}.app`);
+        const bundle = path.join(dir,'browsers/apps',`IKUN-${p.sequence}-${p.id}.app`);
         cp.execFileSync('codesign',['--verify','--deep','--strict',bundle]);
-        assert.equal(cp.execFileSync('/usr/libexec/PlistBuddy',['-c','Print :CFBundleDisplayName',path.join(bundle,'Contents/Info.plist')],{encoding:'utf8'}).trim(),`CIKE #${p.sequence}`);
-        assert.ok(fs.statSync(path.join(bundle,'Contents/Resources/cike-profile.icns')).size>1000);
+        assert.equal(cp.execFileSync('/usr/libexec/PlistBuddy',['-c','Print :CFBundleDisplayName',path.join(bundle,'Contents/Info.plist')],{encoding:'utf8'}).trim(),`IKUN #${p.sequence}`);
+        assert.ok(fs.statSync(path.join(bundle,'Contents/Resources/ikun-profile.icns')).size>1000);
       }
       const commands=cp.execFileSync('ps',['-axo','command='],{encoding:'utf8'}).split('\n').filter(l=>l.includes('--user-data-dir='+store.profileDir(a.id)));
-      assert.ok(commands.some(l=>l.includes(`CIKE-${a.sequence}-${a.id}.app/Contents/MacOS`)));
+      assert.ok(commands.some(l=>l.includes(`IKUN-${a.sequence}-${a.id}.app/Contents/MacOS`)));
       assert.ok(commands.every(l=>!l.includes('--no-sandbox')));
     }
     const contextA = manager.getContext(a.id); const extra = await contextA.newPage();
