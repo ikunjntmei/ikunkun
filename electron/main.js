@@ -74,13 +74,21 @@ function applyChromiumEnv() {
   } catch { /* not downloaded yet */ }
 }
 
+// 获取适配当前系统的图标路径（Windows 优先 .ico，其它平台 .png）
+function getAppIconPath() {
+  const icoPath = path.join(__dirname, 'assets', 'icon.ico');
+  const pngPath = path.join(__dirname, 'assets', 'icon.png');
+  if (process.platform === 'win32' && fs.existsSync(icoPath)) {
+    return icoPath;
+  }
+  return fs.existsSync(pngPath) ? pngPath : undefined;
+}
+
 // 创建系统右下角托盘
 function initTray(iconPath) {
-  if (tray) return;
-  const finalIcon = fs.existsSync(iconPath) ? iconPath : undefined;
-  if (!finalIcon) return;
+  if (tray || !iconPath) return;
 
-  tray = new Tray(finalIcon);
+  tray = new Tray(iconPath);
   tray.setToolTip('IKUN 环境管理');
 
   const trayMenu = Menu.buildFromTemplate([
@@ -138,7 +146,7 @@ function setupAppMenu() {
 }
 
 async function createWindow() {
-  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  const iconPath = getAppIconPath();
 
   mainWindow = new BrowserWindow({
     width: 1240,
@@ -146,7 +154,7 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'IKUN',
-    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -155,14 +163,14 @@ async function createWindow() {
     },
   });
 
-  // 不拦截 close 事件：点击红叉 X 时执行原生关闭流程
-
   mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== uiURL) event.preventDefault(); });
   mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) shell.openExternal(url);
+
+  // 阻止自动唤起外部 Chrome 浏览器
+  mainWindow.webContents.setWindowOpenHandler(() => {
     return { action: 'deny' };
   });
+
   await mainWindow.loadFile(uiFile);
 
   // 初始化右下角托盘
