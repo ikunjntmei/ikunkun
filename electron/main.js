@@ -40,18 +40,25 @@ ipcMain.on('connection-info', event => {
   catch { event.returnValue = {}; }
 });
 
-// 仅保留官方内部 Marker 标记检测，彻底拔除对系统外部 Google Chrome 的扫描与绑定
+// 严禁加载任何 Edge，仅允许内部 Marker 或合规的自定义纯净 Chromium
 function applyChromiumEnv() {
   try {
+    const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
+    if (fs.existsSync(customFile)) {
+      const customExe = fs.readFileSync(customFile, 'utf8').trim();
+      if (customExe && fs.existsSync(customExe) && !customExe.toLowerCase().includes('edge') && !customExe.toLowerCase().includes('msedge')) {
+        process.env.LFB_CHROMIUM_EXECUTABLE = customExe;
+        return;
+      }
+    }
     const marker = executableMarker(DATA_DIR);
     if (fs.existsSync(marker)) {
       const exe = fs.readFileSync(marker, 'utf8').trim();
-      if (exe && fs.existsSync(exe)) {
+      if (exe && fs.existsSync(exe) && !exe.toLowerCase().includes('edge') && !exe.toLowerCase().includes('msedge')) {
         process.env.LFB_CHROMIUM_EXECUTABLE = exe;
         return;
       }
     }
-    // 未设定特定内部标记时，清空环境变量，让 Playwright 自行拉起官方纯净无标 Chromium
     delete process.env.LFB_CHROMIUM_EXECUTABLE;
   } catch {
     delete process.env.LFB_CHROMIUM_EXECUTABLE;
@@ -195,7 +202,13 @@ handle('minimize-to-tray', () => {
 });
 
 handle('chromium-status', async () => {
-  return chromiumStatus(DATA_DIR);
+  const status = await chromiumStatus(DATA_DIR);
+  const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
+  let customPath = '';
+  if (fs.existsSync(customFile)) {
+    customPath = fs.readFileSync(customFile, 'utf8').trim();
+  }
+  return { ...status, customPath };
 });
 
 handle('chromium-download', async (event) => {
@@ -208,6 +221,34 @@ handle('chromium-download', async (event) => {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+handle('save-custom-kernel', async (_, kernelPath) => {
+  if (kernelPath && (kernelPath.toLowerCase().includes('edge') || kernelPath.toLowerCase().includes('msedge'))) {
+    throw new Error('严禁使用 Microsoft Edge 内核');
+  }
+  const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
+  if (kernelPath) {
+    fs.writeFileSync(customFile, kernelPath, 'utf8');
+  } else if (fs.existsSync(customFile)) {
+    fs.unlinkSync(customFile);
+  }
+  applyChromiumEnv();
+  return { ok: true };
+});
+
+handle('browse-kernel', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择自定义浏览器内核可执行文件',
+    filters: [{ name: 'Executables', extensions: ['exe', 'app'] }],
+    properties: ['openFile']
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+  const filePath = result.filePaths[0];
+  if (filePath.toLowerCase().includes('edge') || filePath.toLowerCase().includes('msedge')) {
+    throw new Error('严禁选择 Microsoft Edge 内核');
+  }
+  return { canceled: false, filePath };
 });
 
 handle('open-data-dir', async () => {
