@@ -22,23 +22,33 @@ async function ensureWindowsProfileApp(dataDir, profile, executable) {
     const root = appsRoot(dataDir);
     privateDirectory(root);
 
-    // 为每个环境或全局生成独立命名的启动器，绝不带 chrome 字样
-    // Windows 识别到非 chrome 命名的程序，不会强行关联官方任务栏图标，而是呈现纯净无图标状态
-    const targetDir = path.dirname(executable);
-    const isolatedLauncher = path.join(targetDir, 'ikun-core.exe');
+    // 为每个环境创建独立的隔离容器目录，切断与原 chrome 目录元数据的关联
+    const profileAppDir = path.join(root, `win-profile-${profile.id || profile.sequence || 'default'}`);
+    privateDirectory(profileAppDir);
 
+    const isolatedLauncher = path.join(profileAppDir, 'core-browser.exe');
+
+    // 1. 如果尚未生成独立执行文件，进行复制创建（避免硬链接共享文件元数据与图标流）
     if (!fs.existsSync(isolatedLauncher)) {
       try {
-        // 优先使用硬链接（0 耗时、0 磁盘占用）
-        fs.linkSync(executable, isolatedLauncher);
+        fs.copyFileSync(executable, isolatedLauncher);
       } catch (_) {
-        try {
-          // 备用：拷贝生成
-          fs.copyFileSync(executable, isolatedLauncher);
-        } catch (_) {
-          return executable;
-        }
+        return executable;
       }
+    }
+
+    // 2. 核心：阻断与覆盖 Windows 视觉元素清单（VisualElementsManifest）
+    // 很多时候任务栏死咬 Chrome 彩色图标，就是因为原目录下的 chrome.VisualElementsManifest.xml
+    // 在这里写入一个空的清单，切断任务栏对 Google 官方图标素材的追溯，退化为无图标/纯净状态
+    const manifestFile = path.join(profileAppDir, 'core-browser.VisualElementsManifest.xml');
+    if (!fs.existsSync(manifestFile)) {
+      try {
+        const dummyManifest = `<?xml version="1.0" encoding="utf-8"?>
+<Application xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <VisualElements ShowNameOnSquare150x150Logo="on" Square150x150Logo="" Square70x70Logo="" ForegroundText="light" BackgroundColor="#ffffff"/>
+</Application>`;
+        fs.writeFileSync(manifestFile, dummyManifest, 'utf8');
+      } catch (_) {}
     }
 
     return isolatedLauncher;
