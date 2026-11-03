@@ -295,7 +295,7 @@ class BrowserManager {
             };
 
             if (window.WebGLRenderingContext) hookWebGLReadPixels(WebGLRenderingContext.prototype);
-            if (window.WebGL2RenderingContext) hookWebGLReadPixels(WebGL2RenderingContext.prototype);
+            if (window.WebGL2RenderingContext) hookWebGLReadPixels(WebGL2RenderingContext2D.prototype);
 
             const audioOffset = ((seed % 10) + 1) * 0.0000001;
             const hookAudioBuffer = (proto) => {
@@ -354,6 +354,7 @@ class BrowserManager {
         ...(debugPort ? { debug_url: `http://127.0.0.1:${debugPort}` } : {})
       };
     } catch (error) {
+      console.error('[环境启动失败捕获] 错误详情:', error);
       await context?.close().catch(() => {});
       await forwarder?.stop().catch(() => {});
       throw error;
