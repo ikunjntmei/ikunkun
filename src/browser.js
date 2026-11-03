@@ -178,7 +178,10 @@ class BrowserManager {
         executablePath: targetExecutable,
         locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
         timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
-        chromiumSandbox: true,
+        
+        // 关键防御：关闭沙盒防止触发系统底层 0x80000003 断点崩溃
+        chromiumSandbox: false,
+
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
           '--no-first-run',
@@ -191,6 +194,16 @@ class BrowserManager {
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
+
+          // 免疫 Windows 沙盒限制与图形硬件加速引发断点异常的参数
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-gpu',
+          '--disable-software-rasterizer',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--disable-gpu-sandbox',
+          '--disable-breakpad',
 
           `--class=ikun_app_${profile.id}`,
           `--app-user-model-id=ikun.profile.app.${profile.id}`,
