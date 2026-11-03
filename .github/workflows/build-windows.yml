@@ -28,7 +28,7 @@ jobs:
           if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
           npm install --no-audit
 
-      # 禁用自动发布，仅执行本地打包
+      # 禁用自动发布，执行本地编译
       - name: Build and Package Windows Executable
         run: npx electron-builder --win --x64 -p never
 
@@ -36,7 +36,7 @@ jobs:
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
 
-      # 拆分两步：先建立 Release，再遍历文件安全上传，彻底避免空格和中文参数错位
+      # 确保创建 Release 并只上传单一的 ikun.exe 安装包
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         shell: pwsh
@@ -54,20 +54,18 @@ jobs:
             $releaseTitle = "ikun Windows Release ($env:SHA_SHORT)"
           }
 
-          # 1. 创建 Release（如果已存在则复用）
+          # 1. 创建 Release（如果已存在则直接复用）
           gh release view $tagName > $null 2>&1
           if ($LASTEXITCODE -ne 0) {
             gh release create $tagName --title "$releaseTitle" --generate-notes
           }
 
-          # 2. 遍历 dist 目录下的所有 exe 文件单独上传，完全消除多参数空格解析 Bug
-          $files = Get-ChildItem -Path "dist" -Filter "*.exe"
-          if (-not $files) {
-            Write-Error "dist 目录下未找到任何 exe 打包文件！"
+          # 2. 检查并只上传唯一的安装包文件
+          $targetFile = "dist/ikun.exe"
+          if (-not (Test-Path $targetFile)) {
+            Write-Error "dist 目录下未找到安装包文件: $targetFile！"
             exit 1
           }
 
-          foreach ($file in $files) {
-            Write-Host "正在上传产物: $($file.Name)"
-            gh release upload $tagName $file.FullName --clobber
-          }
+          Write-Host "正在上传安装程序: $targetFile"
+          gh release upload $tagName $targetFile --clobber
