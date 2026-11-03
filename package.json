@@ -32,8 +32,7 @@
     "win": {
       "icon": "electron/assets/icon.ico",
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "mac": {
@@ -42,14 +41,13 @@
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "ikun",
-      "artifactName": "${productName} 正式版 安装包.${ext}"
-    },
-    "portable": {
-      "artifactName": "${productName} 绿色免安装单文件.${ext}"
+      "artifactName": "${productName}.${ext}"
     }
   },
   "dependencies": {
