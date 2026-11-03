@@ -23,7 +23,7 @@ function findFreePort(min, max) {
   });
 }
 
-// 严禁加载任何 Edge、系统 Chrome，彻底隐藏/阻断
+// 绝对拦截：严禁任何包含 edge、msedge 或商业谷歌的路径
 function isForbiddenBrowser(filePath) {
   if (!filePath || typeof filePath !== 'string') return true;
   const p = filePath.toLowerCase();
@@ -31,19 +31,21 @@ function isForbiddenBrowser(filePath) {
 }
 
 function resolveCleanExecutable(dataDir) {
-  // 1. 优先读取已记录的纯净内核标记（过滤 Edge）
+  // 1. 检查持久化设置中是否有用户手动指定的自定义纯净内核路径
+  const customKernelFile = path.join(dataDir, 'custom_kernel.txt');
+  if (fs.existsSync(customKernelFile)) {
+    const customExe = fs.readFileSync(customKernelFile, 'utf8').trim();
+    if (customExe && fs.existsSync(customExe) && !isForbiddenBrowser(customExe)) {
+      return customExe;
+    }
+  }
+
+  // 2. 检查标记文件
   const marker = path.join(dataDir, 'browsers', 'chromium-executable.txt');
   if (fs.existsSync(marker)) {
     const exe = fs.readFileSync(marker, 'utf8').trim();
     if (exe && fs.existsSync(exe) && !isForbiddenBrowser(exe)) {
       return exe;
-    }
-  }
-
-  // 2. 环境变量传参检测（过滤 Edge）
-  if (process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
-    if (!isForbiddenBrowser(process.env.LFB_CHROMIUM_EXECUTABLE)) {
-      return process.env.LFB_CHROMIUM_EXECUTABLE;
     }
   }
 
@@ -177,10 +179,10 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 彻底解绑：获取纯净版无标内核，绝不使用 Edge 或 Google Chrome 副本
+      // 铁律校验：强制获取纯净版内核，绝不允许加载任何 Edge 或商业 Chrome
       const targetExecutable = resolveCleanExecutable(this.store.dataDir);
-      if (!targetExecutable) {
-        throw new Error('未检测到纯净版内核，请在软件主界面点击“下载/更新内核”进行自动下载');
+      if (!targetExecutable || isForbiddenBrowser(targetExecutable)) {
+        throw new Error('未检测到纯净版内核或内核路径受限制，请在软件主界面点击“下载 Chromium”进行安装');
       }
 
       const launchOptions = {
@@ -298,7 +300,7 @@ class BrowserManager {
             };
 
             if (window.WebGLRenderingContext) hookWebGLReadPixels(WebGLRenderingContext.prototype);
-            if (window.WebGL2RenderingContext) hookWebGLReadPixels(WebGL2RenderingContext.prototype);
+            if (window.WebGL2RenderingContext) hookWebGL2RenderingContext(WebGL2RenderingContext.prototype);
 
             // AudioContext 音频波形扰动
             const audioOffset = ((seed % 10) + 1) * 0.0000001;
