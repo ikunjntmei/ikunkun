@@ -49,6 +49,7 @@ jobs:
           make_latest: true
           files: |
             dist/*.exe
+            dist/*.zip
             dist/*.blockmap
             dist/latest.yml
         env:
