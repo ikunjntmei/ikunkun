@@ -124,8 +124,6 @@ class BrowserManager {
         args: [
           '--no-first-run',
           '--no-default-browser-check',
-          `--app-id=local.ikun.browser.${profile.sequence || profile.id}`,
-          `--window-name=ikun_${profile.sequence || profile.id}`,
           '--site-per-process',
           '--disable-background-mode',
           '--disable-blink-features=AutomationControlled',
