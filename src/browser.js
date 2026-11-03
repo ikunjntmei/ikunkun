@@ -23,23 +23,62 @@ function findFreePort(min, max) {
   });
 }
 
+// 严禁加载任何 Edge、系统 Chrome，彻底隐藏/阻断
+function isForbiddenBrowser(filePath) {
+  if (!filePath || typeof filePath !== 'string') return true;
+  const p = filePath.toLowerCase();
+  return p.includes('edge') || p.includes('msedge') || p.includes('google\\chrome') || p.includes('google/chrome');
+}
+
 function resolveCleanExecutable(dataDir) {
-  // 1. 优先读取已下载并验证过的纯净无标 Chromium Marker
+  // 1. 优先读取已记录的纯净内核标记（过滤 Edge）
   const marker = path.join(dataDir, 'browsers', 'chromium-executable.txt');
   if (fs.existsSync(marker)) {
     const exe = fs.readFileSync(marker, 'utf8').trim();
-    if (exe && fs.existsSync(exe)) return exe;
+    if (exe && fs.existsSync(exe) && !isForbiddenBrowser(exe)) {
+      return exe;
+    }
   }
 
-  // 2. 次选读取环境变量传参
+  // 2. 环境变量传参检测（过滤 Edge）
   if (process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
-    return process.env.LFB_CHROMIUM_EXECUTABLE;
+    if (!isForbiddenBrowser(process.env.LFB_CHROMIUM_EXECUTABLE)) {
+      return process.env.LFB_CHROMIUM_EXECUTABLE;
+    }
   }
 
-  // 3. 读取 Playwright 官方默认安装的 Vanilla Chromium
+  // 3. 扫描本地 1148 纯净版 Chromium 目录
+  const candidates = [
+    path.join(dataDir, 'browsers', 'chromium-1148', 'chrome.exe'),
+    path.join(dataDir, 'browsers', 'chromium-1148', 'chrome-win', 'chrome.exe'),
+    path.join(dataDir, 'browsers', 'chromium', 'chrome.exe'),
+    path.join(dataDir, 'browsers', 'chromium', 'chrome-win', 'chrome.exe')
+  ];
+
+  const browsersDir = path.join(dataDir, 'browsers');
+  if (fs.existsSync(browsersDir)) {
+    try {
+      for (const item of fs.readdirSync(browsersDir)) {
+        if (item.startsWith('chromium-1148')) {
+          candidates.push(path.join(browsersDir, item, 'chrome.exe'));
+          candidates.push(path.join(browsersDir, item, 'chrome-win', 'chrome.exe'));
+        }
+      }
+    } catch (_) {}
+  }
+
+  for (const cand of candidates) {
+    if (fs.existsSync(cand) && !isForbiddenBrowser(cand)) {
+      return cand;
+    }
+  }
+
+  // 4. Playwright 官方默认缓存纯净目录备用
   try {
     const defaultPw = chromium.executablePath();
-    if (defaultPw && fs.existsSync(defaultPw)) return defaultPw;
+    if (defaultPw && fs.existsSync(defaultPw) && !isForbiddenBrowser(defaultPw)) {
+      return defaultPw;
+    }
   } catch (_) {}
 
   return null;
@@ -138,7 +177,7 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 彻底解绑：获取纯净版无标内核，绝不使用系统自带的 Google Chrome 副本
+      // 彻底解绑：获取纯净版无标内核，绝不使用 Edge 或 Google Chrome 副本
       const targetExecutable = resolveCleanExecutable(this.store.dataDir);
       if (!targetExecutable) {
         throw new Error('未检测到纯净版内核，请在软件主界面点击“下载/更新内核”进行自动下载');
@@ -164,7 +203,7 @@ class BrowserManager {
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
 
-          // 核心解绑：切断 Windows 任务栏对 Chrome 默认 AppID 映射
+          // 核心解绑：切断 Windows 任务栏对浏览器默认 AppID 映射
           `--class=ikun_app_${profile.id}`,
           `--app-user-model-id=ikun.profile.app.${profile.id}`,
 
