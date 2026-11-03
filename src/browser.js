@@ -134,42 +134,41 @@ class BrowserManager {
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
+          `--app-id=ikun.profile.${profile.id}`,
           ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
       };
 
-      // 1. 本地内核路径查找：优先自定义文件 -> 环境变量 -> 本地 chrome-win 独立沙盒目录
-      let resolvedExe = null;
-      const customKernelFile = path.join(this.store.dataDir, 'custom_kernel.txt');
-      if (fs.existsSync(customKernelFile)) {
-        const saved = fs.readFileSync(customKernelFile, 'utf8').trim();
-        if (saved && fs.existsSync(saved)) resolvedExe = saved;
+      // 1. 精准探测本地独立内核，坚决不启动系统的 Google Chrome
+      const candidates = [
+        path.join(this.store.dataDir, 'browsers', 'chrome-win', 'duck-chrome.exe'),
+        path.join(this.store.dataDir, 'browsers', 'chrome-win', 'ikun-core.exe'),
+        path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe'),
+        path.join(this.store.dataDir, 'chromium', 'chrome.exe')
+      ];
+
+      let targetExe = null;
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          targetExe = p;
+          break;
+        }
       }
 
-      if (!resolvedExe && process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
-        resolvedExe = process.env.LFB_CHROMIUM_EXECUTABLE;
+      if (!targetExe) {
+        throw new Error('未找到本地沙盒内核，请确认 .ikun-browser/browsers/chrome-win 目录存在！');
       }
 
-      const localStandardExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe');
-      const localDuckExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'duck-chrome.exe');
-      if (!resolvedExe) {
-        if (fs.existsSync(localStandardExe)) resolvedExe = localStandardExe;
-        else if (fs.existsSync(localDuckExe)) resolvedExe = localDuckExe;
+      // 如果目标内核叫 chrome.exe，我们在同目录下生成一份 ikun-core.exe，避开 Windows 的 Chrome 识别
+      const targetDir = path.dirname(targetExe);
+      const safeCoreExe = path.join(targetDir, 'ikun-core.exe');
+      if (!fs.existsSync(safeCoreExe)) {
+        try { fs.copyFileSync(targetExe, safeCoreExe); } catch (_) {}
       }
 
-      // 2. 关键：若已指定或找到可用内核，通过 profileapp 封装为每个环境的独立无图标入口；
-      // 若没有独立封装需求，则直接使用定位到的可执行文件
-      if (!headless && this.profileIcons && resolvedExe) {
-        launchOptions.executablePath = await require('./profileapp').ensureProfileApp(
-          this.store.dataDir,
-          profile,
-          resolvedExe
-        );
-      } else if (resolvedExe) {
-        launchOptions.executablePath = resolvedExe;
-      }
+      launchOptions.executablePath = fs.existsSync(safeCoreExe) ? safeCoreExe : targetExe;
 
       checkCancelled();
 
@@ -179,7 +178,7 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 3. 规范化 webdriver 并同步 navigator.languages
+      // 2. 规范化 webdriver 并同步 navigator.languages
       await context.addInitScript((loc) => {
         try {
           if (navigator.webdriver !== false) {
@@ -203,7 +202,7 @@ class BrowserManager {
         } catch (_) {}
       }, effective.locale);
 
-      // 4. Canvas 2D + WebGL + AudioContext 三重硬件指纹隔离注入
+      // 3. Canvas 2D + WebGL + AudioContext 三重硬件指纹噪点注入
       if (profile.canvasMode !== 'off') {
         const seedValue = typeof profile.id === 'string'
           ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
@@ -215,7 +214,7 @@ class BrowserManager {
             const shiftG = ((seed * 3) % 3) - 1;
             const shiftB = ((seed * 7) % 3) - 1;
 
-            // --- A. 2D Canvas 像素注入 ---
+            // Canvas 2D
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(...args) {
               const imageData = originalGetImageData.apply(this, args);
@@ -240,7 +239,7 @@ class BrowserManager {
               return originalToDataURL.apply(this, args);
             };
 
-            // --- B. WebGL 像素读取拦截 (readPixels) ---
+            // WebGL readPixels
             const hookWebGLReadPixels = (proto) => {
               const origReadPixels = proto.readPixels;
               proto.readPixels = function(x, y, width, height, format, type, pixels) {
@@ -255,14 +254,10 @@ class BrowserManager {
               };
             };
 
-            if (window.WebGLRenderingContext) {
-              hookWebGLReadPixels(WebGLRenderingContext.prototype);
-            }
-            if (window.WebGL2RenderingContext) {
-              hookWebGLReadPixels(WebGL2RenderingContext.prototype);
-            }
+            if (window.WebGLRenderingContext) hookWebGLReadPixels(WebGLRenderingContext.prototype);
+            if (window.WebGL2RenderingContext) hookWebGLReadPixels(WebGL2RenderingContext.prototype);
 
-            // --- C. AudioContext 音频指纹波形扰动 ---
+            // AudioContext
             const audioOffset = ((seed % 10) + 1) * 0.0000001;
             const hookAudioBuffer = (proto) => {
               const origGetChannelData = proto.getChannelData;
@@ -275,9 +270,7 @@ class BrowserManager {
               };
             };
 
-            if (window.AudioBuffer) {
-              hookAudioBuffer(AudioBuffer.prototype);
-            }
+            if (window.AudioBuffer) hookAudioBuffer(AudioBuffer.prototype);
 
           } catch (_) {}
         }, seedValue);
