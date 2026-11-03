@@ -33,9 +33,9 @@
       "icon": "electron/assets/icon.ico",
       "target": [
         "nsis",
+        "portable",
         "zip"
-      ],
-      "artifactName": "${productName} 正式版 安装包.${ext}"
+      ]
     },
     "mac": {
       "icon": "electron/assets/icon.icns",
@@ -48,6 +48,9 @@
       "createStartMenuShortcut": true,
       "shortcutName": "ikun",
       "artifactName": "${productName} 正式版 安装包.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName} 正式版 绿色免安装单文件.${ext}"
     }
   },
   "dependencies": {
