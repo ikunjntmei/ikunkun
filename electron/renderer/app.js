@@ -205,8 +205,11 @@ async function saveNewProfile(openAfter = false) {
 async function openProfileWithCheck(profileId) {
   const p = state.profiles.find((x) => x.id === profileId);
   if (!p) { toast('环境不存在', true); return; }
-  if (!state.chromium?.installed) {
-    toast('请先在“设置”里下载 Chromium 内核', true);
+  
+  // 检查是否有自定义内核或者系统安装的内核
+  const hasCustomKernel = !!(localStorage.getItem('custom_kernel_path') || window.lfb?.customKernelPath);
+  if (!state.chromium?.installed && !hasCustomKernel) {
+    toast('请先在“设置”里选择或下载 Chromium 内核', true);
     return;
   }
   if (p.fingerprintMode !== 'native') { toast('请先在编辑中转换旧环境；站点数据会保留', true); return; }
@@ -739,7 +742,12 @@ async function runBatch(type, action) {
   const ids = [...selected];
   if (!ids.length) { toast('请先勾选需要操作的项目', true); return; }
   if (action === 'delete' && !confirm(`删除选中的 ${ids.length} 个${type === 'profile' ? '环境及其全部数据（运行中的环境将关闭）' : '代理'}？`)) return;
-  if (action === 'open' && !state.chromium?.installed) { toast('请先下载 Chromium 内核', true); return; }
+  
+  const hasCustomKernel = !!(localStorage.getItem('custom_kernel_path') || window.lfb?.customKernelPath);
+  if (action === 'open' && !state.chromium?.installed && !hasCustomKernel) {
+    toast('请先下载或选择 Chromium 内核', true);
+    return;
+  }
   batchBusy = true;
   const buttons = ['btn-open-profiles', 'btn-del-profiles', 'btn-del-proxies'].map(id => document.getElementById(id)).filter(Boolean);
   buttons.forEach(b => b.disabled = true);
@@ -802,10 +810,29 @@ async function loadSettings() {
       }
     }
     
+    // 初始化并回显自定义内核设置
+    await initCustomKernelSettings();
     await refreshChromiumStatus();
   } catch (err) {
     console.error('loadSettings error:', err);
   }
+}
+
+async function initCustomKernelSettings() {
+  const inputEl = document.getElementById('set-custom-kernel');
+  if (!inputEl) return;
+  
+  // 优先从本地后端或 window.lfb 获取，不存在则读本地缓存
+  let currentPath = '';
+  if (window.lfb?.getCustomKernel) {
+    try {
+      currentPath = await window.lfb.getCustomKernel();
+    } catch (_) {}
+  }
+  if (!currentPath) {
+    currentPath = localStorage.getItem('custom_kernel_path') || '';
+  }
+  inputEl.value = currentPath;
 }
 
 async function refreshChromiumStatus() {
@@ -813,8 +840,15 @@ async function refreshChromiumStatus() {
     state.chromium = await window.lfb.chromiumStatus();
     const el = document.getElementById('browser-status');
     const btn = document.getElementById('btn-download-browser');
+    const customPath = document.getElementById('set-custom-kernel')?.value || localStorage.getItem('custom_kernel_path');
+    
     if (!el || !btn) return;
-    if (state.chromium.installed) {
+    
+    if (customPath) {
+      el.innerHTML = `<div><span class="pill ok">使用独立定制内核</span></div><div class="sub" style="margin-top:6px;word-break:break-all;">路径: ${esc(customPath)}</div>`;
+      btn.disabled = false;
+      btn.textContent = '重新下载官方内核';
+    } else if (state.chromium.installed) {
       el.innerHTML = `<div><span class="pill ok">已安装</span></div><div class="sub" style="margin-top:6px">版本 ${esc(state.chromium.version || '')}</div>`;
       btn.disabled = !state.chromium.updateAvailable;
       btn.textContent = state.chromium.updateAvailable ? `更新至 ${state.chromium.targetVersion}` : 'Chromium 已安装';
@@ -828,7 +862,8 @@ async function refreshChromiumStatus() {
 }
 
 function updateBanner() {
-  const show = state.chromium && !state.chromium.installed;
+  const hasCustom = !!(localStorage.getItem('custom_kernel_path') || document.getElementById('set-custom-kernel')?.value);
+  const show = !hasCustom && state.chromium && !state.chromium.installed;
   const banner = document.getElementById('browser-banner');
   if (banner) banner.classList.toggle('hidden', !show);
 }
@@ -878,6 +913,59 @@ if (btnSearch) {
 
 const btnDownloadBrowser = document.getElementById('btn-download-browser');
 if (btnDownloadBrowser) btnDownloadBrowser.onclick = startChromiumDownload;
+
+// 自定义内核选择与操作事件
+const btnBrowseKernel = document.getElementById('btn-browse-kernel');
+if (btnBrowseKernel) {
+  btnBrowseKernel.onclick = async () => {
+    const inputEl = document.getElementById('set-custom-kernel');
+    if (window.lfb?.selectKernelFile) {
+      try {
+        const filePath = await window.lfb.selectKernelFile();
+        if (filePath && inputEl) inputEl.value = filePath;
+      } catch (err) {
+        toast('选择文件失败：' + err.message, true);
+      }
+    } else {
+      const manualPath = prompt('请输入独立的 chrome.exe 绝对路径：', inputEl?.value || '');
+      if (manualPath !== null && inputEl) inputEl.value = manualPath.trim();
+    }
+  };
+}
+
+const btnSaveKernel = document.getElementById('btn-save-kernel');
+if (btnSaveKernel) {
+  btnSaveKernel.onclick = async () => {
+    const inputEl = document.getElementById('set-custom-kernel');
+    const pathVal = inputEl ? inputEl.value.trim() : '';
+    localStorage.setItem('custom_kernel_path', pathVal);
+    
+    if (window.lfb?.saveCustomKernel) {
+      try {
+        await window.lfb.saveCustomKernel(pathVal);
+      } catch (_) {}
+    }
+    toast(pathVal ? '自定义内核已保存！' : '已恢复默认内核设置');
+    await refreshChromiumStatus();
+  };
+}
+
+const btnClearKernel = document.getElementById('btn-clear-kernel');
+if (btnClearKernel) {
+  btnClearKernel.onclick = async () => {
+    const inputEl = document.getElementById('set-custom-kernel');
+    if (inputEl) inputEl.value = '';
+    localStorage.removeItem('custom_kernel_path');
+    
+    if (window.lfb?.saveCustomKernel) {
+      try {
+        await window.lfb.saveCustomKernel('');
+      } catch (_) {}
+    }
+    toast('已清空自定义路径，恢复默认内核');
+    await refreshChromiumStatus();
+  };
+}
 
 const btnSaveProxyRoute = document.getElementById('btn-save-proxy-route');
 if (btnSaveProxyRoute) {
