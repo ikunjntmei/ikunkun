@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const { chromium } = require('playwright');
-const { execSync } = require('child_process');
 const { buildContextOptions, webrtcArgs, validateProfile } = require('./fingerprint');
 const { resolveProxy, inlineRecord } = require('./proxyconfig');
 const { ProxyStore } = require('./proxystore');
@@ -24,27 +23,26 @@ function findFreePort(min, max) {
   });
 }
 
-/**
- * 确保获取到 Playwright 官方原生纯净版 Chromium
- * 若本地不存在则自动静默拉取安装，避免 Executable doesn't exist 报错
- */
-function ensurePlaywrightKernel() {
-  let executable = '';
-  try {
-    executable = chromium.executablePath();
-  } catch (_) {}
-
-  if (!executable || !fs.existsSync(executable)) {
-    console.log('[CIKE/ikun] 未检测到 Playwright 纯净内核，正在自动安装...');
-    try {
-      execSync('npx playwright install chromium', { stdio: 'inherit' });
-      executable = chromium.executablePath();
-    } catch (err) {
-      throw new Error('下载 Playwright 官方纯净内核失败: ' + err.message);
-    }
+function resolveCleanExecutable(dataDir) {
+  // 1. 优先读取已下载并验证过的纯净无标 Chromium Marker
+  const marker = path.join(dataDir, 'browsers', 'chromium-executable.txt');
+  if (fs.existsSync(marker)) {
+    const exe = fs.readFileSync(marker, 'utf8').trim();
+    if (exe && fs.existsSync(exe)) return exe;
   }
 
-  return executable;
+  // 2. 次选读取环境变量传参
+  if (process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
+    return process.env.LFB_CHROMIUM_EXECUTABLE;
+  }
+
+  // 3. 读取 Playwright 官方默认安装的 Vanilla Chromium
+  try {
+    const defaultPw = chromium.executablePath();
+    if (defaultPw && fs.existsSync(defaultPw)) return defaultPw;
+  } catch (_) {}
+
+  return null;
 }
 
 class BrowserManager {
@@ -140,8 +138,11 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 获取纯净版内核路径（若缺失会自动安装，绝不读取旧版 chrome.exe）
-      const targetExecutable = ensurePlaywrightKernel();
+      // 彻底解绑：获取纯净版无标内核，绝不使用系统自带的 Google Chrome 副本
+      const targetExecutable = resolveCleanExecutable(this.store.dataDir);
+      if (!targetExecutable) {
+        throw new Error('未检测到纯净版内核，请在软件主界面点击“下载/更新内核”进行自动下载');
+      }
 
       const launchOptions = {
         ...options,
@@ -163,7 +164,7 @@ class BrowserManager {
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
 
-          // 核心解绑：独立类名与独立 AppID，解耦 Windows 任务栏官方 Chrome 图标映射
+          // 核心解绑：切断 Windows 任务栏对 Chrome 默认 AppID 映射
           `--class=ikun_app_${profile.id}`,
           `--app-user-model-id=ikun.profile.app.${profile.id}`,
 
