@@ -171,24 +171,38 @@
         <div class="cards">
           <!-- 内核管理 -->
           <div class="card">
-            <h2>Chromium 内核</h2>
+            <h2>浏览器运行内核</h2>
             <div id="browser-status"></div>
             <div class="progress hidden" id="browser-progress"><div class="bar"></div></div>
+            
+            <!-- 内核类型选择器 -->
             <div style="margin-top:14px">
+              <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500">选择默认内核</label>
+              <div class="row" style="display:flex;gap:8px">
+                <select id="set-kernel-type" class="input" style="flex:1">
+                  <option value="bundled">内置纯净 Chromium（隔离推荐）</option>
+                  <option value="edge">Microsoft Edge（系统原生，海浪图标）</option>
+                  <option value="custom">自定义内核路径...</option>
+                </select>
+                <button type="button" class="btn small primary" id="btn-save-kernel-type">应用内核</button>
+              </div>
+            </div>
+
+            <div id="kernel-download-box" style="margin-top:12px">
               <button class="btn small primary" id="btn-download-browser">下载 Chromium</button>
             </div>
-            <div class="hint">用于隔离执行的独立浏览器渲染引擎。</div>
+            <div class="hint" id="kernel-hint" style="margin-top:6px">用于隔离执行的独立浏览器渲染引擎。</div>
 
-            <!-- 自定义内核路径设置 -->
-            <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
-              <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500">自定义内核路径 (chrome.exe)</label>
+            <!-- 自定义内核路径输入区（选择“自定义内核路径”时显示） -->
+            <div id="custom-kernel-panel" style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06);display:none">
+              <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500">自定义内核路径 (可执行文件 .exe)</label>
               <div class="row" style="display:flex;gap:8px">
-                <input id="set-custom-kernel" class="input" style="flex:1" placeholder="留空则自动探测或回退系统默认" readonly>
+                <input id="set-custom-kernel" class="input" style="flex:1" placeholder="请选择 .exe 文件" readonly>
                 <button type="button" class="btn small" id="btn-browse-kernel">选择文件</button>
-                <button type="button" class="btn small primary" id="btn-save-kernel">保存</button>
+                <button type="button" class="btn small primary" id="btn-save-kernel">保存路径</button>
                 <button type="button" class="btn small danger-ghost" id="btn-clear-kernel">清除</button>
               </div>
-              <div class="hint" style="margin-top:6px">指定独立的 chrome.exe，实现多环境与系统日常 Chrome 物理隔离。</div>
+              <div class="hint" style="margin-top:6px">指定独立的浏览器可执行文件，实现多环境与系统日常 Chrome 物理隔离。</div>
             </div>
           </div>
 
