@@ -116,36 +116,34 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      const launchOptions = {
-        ...options,
-        headless,
-        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
-        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
-        chromiumSandbox: true,
-        ignoreDefaultArgs: ['--enable-automation', '--test-type'],
-        args: [
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--site-per-process',
-          '--disable-background-mode',
-          '--disable-blink-features=AutomationControlled',
-          '--exclude-switches=enable-automation',
-          '--disable-infobars',
-          '--enforce-webrtc-ip-permission-check',
-          '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-          '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
-          ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
-          ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
-          ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
-        ],
-      };
-
-      // 1. 定位独立内核路径：优先 custom_kernel.txt -> 环境变量 -> chrome-win
+      // 1. 定位独立内核路径：优先读取 custom_kernel.txt，若未指定或配置了 Edge 则自动定位系统 Edge
       let resolvedExe = null;
+      let isEdge = false;
+
       const customKernelFile = path.join(this.store.dataDir, 'custom_kernel.txt');
       if (fs.existsSync(customKernelFile)) {
         const saved = fs.readFileSync(customKernelFile, 'utf8').trim();
-        if (saved && fs.existsSync(saved)) resolvedExe = saved;
+        if (saved && (saved.toLowerCase().includes('msedge') || saved.toLowerCase() === 'edge')) {
+          isEdge = true;
+        } else if (saved && fs.existsSync(saved)) {
+          resolvedExe = saved;
+          if (saved.toLowerCase().includes('msedge')) isEdge = true;
+        }
+      }
+
+      if (isEdge || process.env.LFB_USE_EDGE === '1') {
+        const edgeCandidates = [
+          'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+          'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+          path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Edge\\Application\\msedge.exe')
+        ];
+        for (const candidate of edgeCandidates) {
+          if (fs.existsSync(candidate)) {
+            resolvedExe = candidate;
+            isEdge = true;
+            break;
+          }
+        }
       }
 
       if (!resolvedExe && process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
@@ -158,6 +156,36 @@ class BrowserManager {
         if (fs.existsSync(localIsolatedExe)) resolvedExe = localIsolatedExe;
         else if (fs.existsSync(localStandardExe)) resolvedExe = localStandardExe;
       }
+
+      const launchArgs = [
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--site-per-process',
+        '--disable-background-mode',
+        '--exclude-switches=enable-automation',
+        '--disable-infobars',
+        '--enforce-webrtc-ip-permission-check',
+        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+        '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
+        ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
+        ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
+        ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
+      ];
+
+      // 仅在非 Edge 内核时加入该特征消除参数，避免 Edge 启动拦截
+      if (!isEdge) {
+        launchArgs.push('--disable-blink-features=AutomationControlled');
+      }
+
+      const launchOptions = {
+        ...options,
+        headless,
+        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
+        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
+        chromiumSandbox: true,
+        ignoreDefaultArgs: ['--enable-automation', '--test-type'],
+        args: launchArgs,
+      };
 
       if (resolvedExe) {
         launchOptions.executablePath = resolvedExe;
