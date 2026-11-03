@@ -178,6 +178,18 @@
               <button class="btn small primary" id="btn-download-browser">下载 Chromium</button>
             </div>
             <div class="hint">用于隔离执行的独立浏览器渲染引擎。</div>
+
+            <!-- 自定义内核路径设置 -->
+            <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
+              <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500">自定义内核路径 (chrome.exe)</label>
+              <div class="row" style="display:flex;gap:8px">
+                <input id="set-custom-kernel" class="input" style="flex:1" placeholder="留空则自动探测或回退系统默认" readonly>
+                <button type="button" class="btn small" id="btn-browse-kernel">选择文件</button>
+                <button type="button" class="btn small primary" id="btn-save-kernel">保存</button>
+                <button type="button" class="btn small danger-ghost" id="btn-clear-kernel">清除</button>
+              </div>
+              <div class="hint" style="margin-top:6px">指定独立的 chrome.exe，实现多环境与系统日常 Chrome 物理隔离。</div>
+            </div>
           </div>
 
           <!-- 网络设置 -->
@@ -250,11 +262,8 @@
         if (currentHtml.includes('8.8.8')) {
           isUpdating = true;
           footEl.innerHTML = currentHtml
-            // 剔除两处 8.8.8 版本号
             .replaceAll('8.8.8', '')
-            // 清理第一行 IKUN 后面多余的空白或 nbsp
             .replace(/(IKUN)(?:\s|&nbsp;)+/g, '$1 ')
-            // 清理第二行开头残留的竖线、斜杠、连字符及周围空白
             .replace(/(<[^>]+>)\s*([\|\-\/·]\s*)+/g, '$1')
             .trim();
           isUpdating = false;
