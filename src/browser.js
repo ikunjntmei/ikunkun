@@ -116,10 +116,26 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 干净的标准参数，去除一切会导致 Playwright CDP 连接卡住的参数
+      // 1. 绝对物理锁定：强制使用沙盒路径，彻底切断系统 Chrome 回退
+      const baseUserDir = process.env.USERPROFILE || 'C:\\Users\\zsc';
+      const sandboxDir = path.join(baseUserDir, '.ikun-browser', 'browsers', 'chrome-win');
+      const originExe = path.join(sandboxDir, 'chrome.exe');
+      const coreExe = path.join(sandboxDir, 'ikun-core.exe');
+
+      // 确保 ikun-core.exe 存在，避开 Windows 的 chrome.exe 注册表图标映射
+      if (!fs.existsSync(coreExe) && fs.existsSync(originExe)) {
+        try { fs.copyFileSync(originExe, coreExe); } catch (_) {}
+      }
+
+      const targetExecutable = fs.existsSync(coreExe) ? coreExe : originExe;
+      if (!fs.existsSync(targetExecutable)) {
+        throw new Error(`未检测到可用沙盒内核: ${targetExecutable}`);
+      }
+
       const launchOptions = {
         ...options,
         headless,
+        executablePath: targetExecutable,
         locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
         timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
         chromiumSandbox: true,
@@ -141,26 +157,6 @@ class BrowserManager {
         ],
       };
 
-      // 1. 定位独立沙盒内核
-      let resolvedExe = null;
-      const targetDir = path.join(this.store.dataDir, 'browsers', 'chrome-win');
-      const duckExe = path.join(targetDir, 'duck-chrome.exe');
-      const coreExe = path.join(targetDir, 'ikun-core.exe');
-      const standardExe = path.join(targetDir, 'chrome.exe');
-
-      // 优先调度非 chrome 命名的二进制文件
-      if (fs.existsSync(duckExe)) {
-        resolvedExe = duckExe;
-      } else if (fs.existsSync(coreExe)) {
-        resolvedExe = coreExe;
-      } else if (fs.existsSync(standardExe)) {
-        resolvedExe = standardExe;
-      }
-
-      if (resolvedExe) {
-        launchOptions.executablePath = resolvedExe;
-      }
-
       checkCancelled();
 
       const directory = this.store.profileDir(id);
@@ -169,7 +165,7 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 2. 规范化 webdriver 并同步 navigator.languages
+      // 2. 规范化 navigator 属性
       await context.addInitScript((loc) => {
         try {
           if (navigator.webdriver !== false) {
@@ -193,7 +189,7 @@ class BrowserManager {
         } catch (_) {}
       }, effective.locale);
 
-      // 3. Canvas 2D + WebGL + AudioContext 三重硬件指纹隔离注入
+      // 3. Canvas 2D + WebGL + AudioContext 三重硬件指纹噪点注入
       if (profile.canvasMode !== 'off') {
         const seedValue = typeof profile.id === 'string'
           ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
@@ -205,7 +201,7 @@ class BrowserManager {
             const shiftG = ((seed * 3) % 3) - 1;
             const shiftB = ((seed * 7) % 3) - 1;
 
-            // Canvas 2D
+            // Canvas 2D 噪点
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(...args) {
               const imageData = originalGetImageData.apply(this, args);
@@ -230,7 +226,7 @@ class BrowserManager {
               return originalToDataURL.apply(this, args);
             };
 
-            // WebGL readPixels
+            // WebGL readPixels 噪点
             const hookWebGLReadPixels = (proto) => {
               const origReadPixels = proto.readPixels;
               proto.readPixels = function(x, y, width, height, format, type, pixels) {
@@ -248,7 +244,7 @@ class BrowserManager {
             if (window.WebGLRenderingContext) hookWebGLReadPixels(WebGLRenderingContext.prototype);
             if (window.WebGL2RenderingContext) hookWebGLReadPixels(WebGL2RenderingContext.prototype);
 
-            // AudioContext
+            // AudioContext 音频波形扰动
             const audioOffset = ((seed % 10) + 1) * 0.0000001;
             const hookAudioBuffer = (proto) => {
               const origGetChannelData = proto.getChannelData;
