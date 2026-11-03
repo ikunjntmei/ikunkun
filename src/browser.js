@@ -1,4 +1,6 @@
 'use strict';
+const fs = require('fs');
+const path = require('path');
 const net = require('net');
 const { chromium } = require('playwright');
 const { buildContextOptions, webrtcArgs, validateProfile } = require('./fingerprint');
@@ -138,17 +140,25 @@ class BrowserManager {
         ],
       };
 
-      if (process.env.LFB_CHROMIUM_EXECUTABLE) {
+      // 自动定位独立内核：优先环境变量 -> 其次数据目录下的专属 chrome-win -> 最后回退到 Playwright 默认内核
+      const localIsolatedExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe');
+      if (process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
         launchOptions.executablePath = process.env.LFB_CHROMIUM_EXECUTABLE;
+      } else if (fs.existsSync(localIsolatedExe)) {
+        launchOptions.executablePath = localIsolatedExe;
       }
 
       checkCancelled();
 
       if (!headless && this.profileIcons) {
+        let fallbackExecutable = launchOptions.executablePath;
+        if (!fallbackExecutable) {
+          try { fallbackExecutable = chromium.executablePath(); } catch (_) {}
+        }
         launchOptions.executablePath = await require('./profileapp').ensureProfileApp(
           this.store.dataDir,
           profile,
-          launchOptions.executablePath || chromium.executablePath()
+          fallbackExecutable
         );
         checkCancelled();
       }
