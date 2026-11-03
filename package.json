@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node src/server.js",
     "electron": "electron .",
-    "dist:win": "electron-builder --win --x64",
+    "dist:win": "electron-builder --win --x64 -p never",
     "pack:mac-arm64": "electron-packager . IKUN --icon=electron/assets/icon.icns --platform=darwin --arch=arm64 --out=dist --overwrite --prune --ignore=\"^/(test|.browsers|dist|.*.zip$)\"",
     "test": "node --test --test-concurrency=1 test/security.test.js test/network.test.js test/runtime.test.js test/downloads.js test/environments.test.js",
     "test:desktop": "node --test test/desktop.test.js",
@@ -34,7 +34,8 @@
       "target": [
         "nsis",
         "zip"
-      ]
+      ],
+      "artifactName": "${productName} 正式版 安装包.${ext}"
     },
     "mac": {
       "icon": "electron/assets/icon.icns",
@@ -45,7 +46,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ikun"
+      "shortcutName": "ikun",
+      "artifactName": "${productName} 正式版 安装包.${ext}"
     }
   },
   "dependencies": {
