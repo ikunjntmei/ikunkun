@@ -202,14 +202,21 @@ async function saveNewProfile(openAfter = false) {
   }
 }
 
+function hasValidKernelConfig() {
+  const kernelType = localStorage.getItem('custom_kernel_type') || 'bundled';
+  if (kernelType === 'edge') return true;
+  if (kernelType === 'custom') {
+    return !!(localStorage.getItem('custom_kernel_path') || window.lfb?.customKernelPath);
+  }
+  return !!(state.chromium?.installed || localStorage.getItem('custom_kernel_path') || window.lfb?.customKernelPath);
+}
+
 async function openProfileWithCheck(profileId) {
   const p = state.profiles.find((x) => x.id === profileId);
   if (!p) { toast('环境不存在', true); return; }
   
-  // 检查是否有自定义内核或者系统安装的内核
-  const hasCustomKernel = !!(localStorage.getItem('custom_kernel_path') || window.lfb?.customKernelPath);
-  if (!state.chromium?.installed && !hasCustomKernel) {
-    toast('请先在“设置”里选择或下载 Chromium 内核', true);
+  if (!hasValidKernelConfig()) {
+    toast('请先在“设置”里选择或下载浏览器内核', true);
     return;
   }
   if (p.fingerprintMode !== 'native') { toast('请先在编辑中转换旧环境；站点数据会保留', true); return; }
@@ -743,9 +750,8 @@ async function runBatch(type, action) {
   if (!ids.length) { toast('请先勾选需要操作的项目', true); return; }
   if (action === 'delete' && !confirm(`删除选中的 ${ids.length} 个${type === 'profile' ? '环境及其全部数据（运行中的环境将关闭）' : '代理'}？`)) return;
   
-  const hasCustomKernel = !!(localStorage.getItem('custom_kernel_path') || window.lfb?.customKernelPath);
-  if (action === 'open' && !state.chromium?.installed && !hasCustomKernel) {
-    toast('请先下载或选择 Chromium 内核', true);
+  if (action === 'open' && !hasValidKernelConfig()) {
+    toast('请先下载或选择浏览器内核', true);
     return;
   }
   batchBusy = true;
@@ -810,19 +816,26 @@ async function loadSettings() {
       }
     }
     
-    // 初始化并回显自定义内核设置
-    await initCustomKernelSettings();
+    // 初始化并回显内核选择与自定义内核设置
+    await initKernelSelectorUI();
     await refreshChromiumStatus();
   } catch (err) {
     console.error('loadSettings error:', err);
   }
 }
 
-async function initCustomKernelSettings() {
+async function initKernelSelectorUI() {
+  const typeSelect = document.getElementById('set-kernel-type');
+  const customPanel = document.getElementById('custom-kernel-panel');
   const inputEl = document.getElementById('set-custom-kernel');
-  if (!inputEl) return;
-  
-  // 优先从本地后端或 window.lfb 获取，不存在则读本地缓存
+  const downloadBox = document.getElementById('kernel-download-box');
+  const hintEl = document.getElementById('kernel-hint');
+
+  // 获取保存的内核类型，默认为 bundled
+  const savedType = localStorage.getItem('custom_kernel_type') || 'bundled';
+  if (typeSelect) typeSelect.value = savedType;
+
+  // 获取自定义路径
   let currentPath = '';
   if (window.lfb?.getCustomKernel) {
     try {
@@ -832,7 +845,30 @@ async function initCustomKernelSettings() {
   if (!currentPath) {
     currentPath = localStorage.getItem('custom_kernel_path') || '';
   }
-  inputEl.value = currentPath;
+  if (inputEl) inputEl.value = currentPath;
+
+  // 根据当前类型切换面板显隐与说明
+  const updateVisibility = (type) => {
+    if (customPanel) customPanel.style.display = type === 'custom' ? 'block' : 'none';
+    if (downloadBox) downloadBox.style.display = type === 'bundled' ? 'block' : 'none';
+    if (hintEl) {
+      if (type === 'bundled') {
+        hintEl.textContent = '使用独立沙盒纯净 Chromium 内核，蓝白图标，安全隔离防关联。';
+      } else if (type === 'edge') {
+        hintEl.textContent = '使用 Windows 系统内置 Microsoft Edge 内核，海浪图标，免安装免下载。';
+      } else if (type === 'custom') {
+        hintEl.textContent = '指定自定义的浏览器可执行文件 (.exe)，如修改版小黄鸭内核或 Brave 等。';
+      }
+    }
+  };
+
+  updateVisibility(savedType);
+
+  if (typeSelect) {
+    typeSelect.onchange = () => {
+      updateVisibility(typeSelect.value);
+    };
+  }
 }
 
 async function refreshChromiumStatus() {
@@ -840,30 +876,42 @@ async function refreshChromiumStatus() {
     state.chromium = await window.lfb.chromiumStatus();
     const el = document.getElementById('browser-status');
     const btn = document.getElementById('btn-download-browser');
+    const kernelType = localStorage.getItem('custom_kernel_type') || 'bundled';
     const customPath = document.getElementById('set-custom-kernel')?.value || localStorage.getItem('custom_kernel_path');
     
     if (!el || !btn) return;
     
-    if (customPath) {
-      el.innerHTML = `<div><span class="pill ok">使用独立定制内核</span></div><div class="sub" style="margin-top:6px;word-break:break-all;">路径: ${esc(customPath)}</div>`;
-      btn.disabled = false;
-      btn.textContent = '重新下载官方内核';
-    } else if (state.chromium.installed) {
-      el.innerHTML = `<div><span class="pill ok">已安装</span></div><div class="sub" style="margin-top:6px">版本 ${esc(state.chromium.version || '')}</div>`;
-      btn.disabled = !state.chromium.updateAvailable;
-      btn.textContent = state.chromium.updateAvailable ? `更新至 ${state.chromium.targetVersion}` : 'Chromium 已安装';
+    if (kernelType === 'edge') {
+      el.innerHTML = `<div><span class="pill ok">Microsoft Edge 系统内核</span></div><div class="sub" style="margin-top:6px">已就绪 · 无需额外下载</div>`;
+      btn.disabled = true;
+    } else if (kernelType === 'custom') {
+      if (customPath) {
+        el.innerHTML = `<div><span class="pill ok">自定义定制内核</span></div><div class="sub" style="margin-top:6px;word-break:break-all;">路径: ${esc(customPath)}</div>`;
+      } else {
+        el.innerHTML = `<div><span class="pill failed">未指定可执行文件</span></div><div class="sub" style="margin-top:6px">请在下方选择 .exe 路径并保存</div>`;
+      }
     } else {
-      el.innerHTML = `<div><span class="pill unchecked">未安装</span></div>`;
-      btn.disabled = false;
-      btn.textContent = '下载 Chromium';
+      // bundled 默认内核
+      if (customPath && customPath.includes('duck-chrome')) {
+        el.innerHTML = `<div><span class="pill ok">独立沙盒内核</span></div><div class="sub" style="margin-top:6px;word-break:break-all;">路径: ${esc(customPath)}</div>`;
+        btn.disabled = false;
+        btn.textContent = '重新下载官方内核';
+      } else if (state.chromium.installed) {
+        el.innerHTML = `<div><span class="pill ok">已安装</span></div><div class="sub" style="margin-top:6px">版本 ${esc(state.chromium.version || '')}</div>`;
+        btn.disabled = !state.chromium.updateAvailable;
+        btn.textContent = state.chromium.updateAvailable ? `更新至 ${state.chromium.targetVersion}` : 'Chromium 已安装';
+      } else {
+        el.innerHTML = `<div><span class="pill unchecked">未安装</span></div>`;
+        btn.disabled = false;
+        btn.textContent = '下载 Chromium';
+      }
     }
     updateBanner();
   } catch (e) { toast('检测内核状态失败：' + e.message, true); }
 }
 
 function updateBanner() {
-  const hasCustom = !!(localStorage.getItem('custom_kernel_path') || document.getElementById('set-custom-kernel')?.value);
-  const show = !hasCustom && state.chromium && !state.chromium.installed;
+  const show = !hasValidKernelConfig();
   const banner = document.getElementById('browser-banner');
   if (banner) banner.classList.toggle('hidden', !show);
 }
@@ -914,6 +962,34 @@ if (btnSearch) {
 const btnDownloadBrowser = document.getElementById('btn-download-browser');
 if (btnDownloadBrowser) btnDownloadBrowser.onclick = startChromiumDownload;
 
+// 切换与应用内核类型
+const btnSaveKernelType = document.getElementById('btn-save-kernel-type');
+if (btnSaveKernelType) {
+  btnSaveKernelType.onclick = async () => {
+    const type = document.getElementById('set-kernel-type')?.value || 'bundled';
+    localStorage.setItem('custom_kernel_type', type);
+
+    if (type === 'edge') {
+      const edgePath = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+      localStorage.setItem('custom_kernel_path', edgePath);
+      if (window.lfb?.saveCustomKernel) {
+        try { await window.lfb.saveCustomKernel(edgePath); } catch (_) {}
+      }
+      toast('已切换为 Microsoft Edge 内核！');
+    } else if (type === 'bundled') {
+      // 恢复内置内核（清空自定义覆盖）
+      localStorage.removeItem('custom_kernel_path');
+      if (window.lfb?.saveCustomKernel) {
+        try { await window.lfb.saveCustomKernel(''); } catch (_) {}
+      }
+      toast('已切换为默认内置 Chromium！');
+    } else if (type === 'custom') {
+      toast('请在下方选择自定义 .exe 并点击保存');
+    }
+    await refreshChromiumStatus();
+  };
+}
+
 // 自定义内核选择与操作事件
 const btnBrowseKernel = document.getElementById('btn-browse-kernel');
 if (btnBrowseKernel) {
@@ -927,7 +1003,7 @@ if (btnBrowseKernel) {
         toast('选择文件失败：' + err.message, true);
       }
     } else {
-      const manualPath = prompt('请输入独立的 chrome.exe 绝对路径：', inputEl?.value || '');
+      const manualPath = prompt('请输入可执行文件绝对路径：', inputEl?.value || '');
       if (manualPath !== null && inputEl) inputEl.value = manualPath.trim();
     }
   };
@@ -938,6 +1014,11 @@ if (btnSaveKernel) {
   btnSaveKernel.onclick = async () => {
     const inputEl = document.getElementById('set-custom-kernel');
     const pathVal = inputEl ? inputEl.value.trim() : '';
+    if (!pathVal) {
+      toast('请先选择可执行文件路径', true);
+      return;
+    }
+    localStorage.setItem('custom_kernel_type', 'custom');
     localStorage.setItem('custom_kernel_path', pathVal);
     
     if (window.lfb?.saveCustomKernel) {
@@ -945,7 +1026,7 @@ if (btnSaveKernel) {
         await window.lfb.saveCustomKernel(pathVal);
       } catch (_) {}
     }
-    toast(pathVal ? '自定义内核已保存！' : '已恢复默认内核设置');
+    toast('自定义内核已保存！');
     await refreshChromiumStatus();
   };
 }
@@ -962,7 +1043,7 @@ if (btnClearKernel) {
         await window.lfb.saveCustomKernel('');
       } catch (_) {}
     }
-    toast('已清空自定义路径，恢复默认内核');
+    toast('已清空自定义路径');
     await refreshChromiumStatus();
   };
 }
