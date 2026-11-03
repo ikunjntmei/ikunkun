@@ -151,7 +151,7 @@ class BrowserManager {
     }
 
     let proxy = proxyRecord ? ProxyStore.toPlaywright(proxyRecord) : null;
-    let forwarder, context;
+    let forwarder, browserInstance, context;
 
     try {
       if (proxyRecord?.type === 'socks5' && (proxyRecord.username || proxyRecord.password || useSystemProxy)) {
@@ -172,21 +172,21 @@ class BrowserManager {
         throw new Error(`致命错误：当前未能成功定位 1148 纯净版 Chromium 内核。请点击软件中的“下载 Chromium”进行安装！`);
       }
 
+      const directory = this.store.profileDir(id);
+      privateDirectory(directory);
+      await prepareDownloads(directory, this.downloadsDirectory);
+
       const launchOptions = {
         ...options,
         headless,
         executablePath: targetExecutable,
-        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
-        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
         
         // 关键防御：关闭沙盒防止触发系统底层 0x80000003 断点崩溃
         chromiumSandbox: false,
 
-        // 显式关闭 Playwright 默认内置的管道通信，强制走 TCP 端口
-        pipe: false,
-
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
+          `--user-data-dir=${directory}`,
           '--no-first-run',
           '--no-default-browser-check',
           '--site-per-process',
@@ -208,7 +208,7 @@ class BrowserManager {
           '--disable-gpu-sandbox',
           '--disable-breakpad',
 
-          // 显式绑定本地 TCP 调试端口
+          // 显式绑定本地 TCP 调试端口，彻底规避管道冲突
           `--remote-debugging-port=${debugPort}`,
           '--remote-debugging-address=127.0.0.1',
 
@@ -222,11 +222,12 @@ class BrowserManager {
 
       checkCancelled();
 
-      const directory = this.store.profileDir(id);
-      privateDirectory(directory);
-      await prepareDownloads(directory, this.downloadsDirectory);
-
-      context = await chromium.launchPersistentContext(directory, launchOptions);
+      // 彻底摆脱 launchPersistentContext 的底层管道限制，采用标准 chromium.launch
+      browserInstance = await chromium.launch(launchOptions);
+      context = await browserInstance.newContext({
+        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
+        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
+      });
 
       await context.addInitScript((loc) => {
         try {
@@ -324,10 +325,10 @@ class BrowserManager {
       await configureDownloads(context);
       checkCancelled();
 
-      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
+      const session = { context, browserInstance, debugPort, headless, openedAt: Date.now(), forwarder, network };
       this.sessions.set(id, session);
 
-      context.on('close', () => {
+      browserInstance.on('disconnected', () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id);
         forwarder?.stop().catch(() => {});
       });
@@ -362,6 +363,7 @@ class BrowserManager {
     } catch (error) {
       console.error('[环境启动失败捕获] 错误详情:', error);
       await context?.close().catch(() => {});
+      await browserInstance?.close().catch(() => {});
       await forwarder?.stop().catch(() => {});
       throw error;
     }
@@ -374,8 +376,9 @@ class BrowserManager {
       await this.opening.get(id)?.catch(() => {});
       const session = this.sessions.get(id);
       if (session) {
-        await session.context.close();
-        await session.forwarder?.stop();
+        await session.context?.close().catch(() => {});
+        await session.browserInstance?.close().catch(() => {});
+        await session.forwarder?.stop().catch(() => {});
         if (this.sessions.get(id) === session) this.sessions.delete(id);
       }
       return { profile_id: id, open: false };
