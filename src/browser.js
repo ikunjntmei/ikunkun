@@ -1,381 +1,268 @@
 'use strict';
-const fs = require('fs');
+/**
+ * ikun — Electron shell.
+ * Main process starts the local backend (Koa API + profile/browser manager)
+ * and hosts the management UI, which talks to the same Local API over HTTP.
+ */
+const { app, BrowserWindow, Menu, Tray, ipcMain, shell, session, safeStorage, dialog, clipboard } = require('electron');
+const { pathToFileURL } = require('url');
 const path = require('path');
-const net = require('net');
-const { chromium } = require('playwright');
-const { buildContextOptions, webrtcArgs, validateProfile } = require('./fingerprint');
-const { resolveProxy, inlineRecord } = require('./proxyconfig');
-const { ProxyStore } = require('./proxystore');
-const { checkProxy } = require('./proxycheck');
-const { privateDirectory } = require('./privatefiles');
-const { prepareDownloads, configureDownloads } = require('./downloads');
+const fs = require('fs');
 
-function findFreePort(min, max) {
-  return new Promise((resolve, reject) => {
-    let port = min;
-    const next = () => {
-      if (port > max) return reject(new Error('no free debug port'));
-      const s = net.createServer();
-      s.once('error', () => { port++; next(); });
-      s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
-    };
-    next();
+const { startBackend, DATA_DIR } = require('../src/server');
+const { chromiumStatus, downloadChromium, executableMarker } = require('./chromium');
+const { checkUpdate, installUpdate } = require('./updater');
+
+let backend = null;
+let mainWindow = null;
+let tray = null;
+
+const uiFile = path.join(__dirname, 'renderer', 'index.html');
+const uiURL = pathToFileURL(uiFile).href;
+
+if (process.env.LFB_DATA) app.setPath('userData', path.join(DATA_DIR, 'desktop'));
+if (!app.requestSingleInstanceLock()) app.exit(0);
+app.on('second-instance', () => { 
+  if (mainWindow && !mainWindow.isDestroyed()) { 
+    mainWindow.show(); 
+    mainWindow.focus(); 
+  } 
+});
+
+function trusted(event) {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || event.senderFrame.url !== uiURL) {
+    throw new Error('Untrusted IPC sender');
+  }
+}
+
+ipcMain.on('connection-info', event => {
+  try { trusted(event); event.returnValue = { apiBase: backend.url, token: backend.token }; }
+  catch { event.returnValue = {}; }
+});
+
+function applyChromiumEnv() {
+  try {
+    const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
+    if (fs.existsSync(customFile)) {
+      const customExe = fs.readFileSync(customFile, 'utf8').trim();
+      if (customExe && fs.existsSync(customExe) && !customExe.toLowerCase().includes('edge') && !customExe.toLowerCase().includes('msedge')) {
+        process.env.LFB_CHROMIUM_EXECUTABLE = customExe;
+        return;
+      }
+    }
+    const marker = executableMarker(DATA_DIR);
+    if (fs.existsSync(marker)) {
+      const exe = fs.readFileSync(marker, 'utf8').trim();
+      if (exe && fs.existsSync(exe) && !exe.toLowerCase().includes('edge') && !exe.toLowerCase().includes('msedge')) {
+        process.env.LFB_CHROMIUM_EXECUTABLE = exe;
+        return;
+      }
+    }
+    delete process.env.LFB_CHROMIUM_EXECUTABLE;
+  } catch {
+    delete process.env.LFB_CHROMIUM_EXECUTABLE;
+  }
+}
+
+function getAppIconPath() {
+  const icoPath = path.join(__dirname, 'assets', 'icon.ico');
+  const pngPath = path.join(__dirname, 'assets', 'icon.png');
+  if (process.platform === 'win32' && fs.existsSync(icoPath)) {
+    return icoPath;
+  }
+  return fs.existsSync(pngPath) ? pngPath : undefined;
+}
+
+function initTray(iconPath) {
+  if (tray || !iconPath) return;
+
+  tray = new Tray(iconPath);
+  tray.setToolTip('ikun');
+
+  const trayMenu = Menu.buildFromTemplate([
+    {
+      label: '显示主界面',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '退出软件',
+      click: () => {
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setContextMenu(trayMenu);
+
+  tray.on('click', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible()) {
+      mainWindow.hide();
+    } else {
+      mainWindow.show();
+      mainWindow.focus();
+    }
   });
 }
 
-function isForbiddenBrowser(filePath) {
-  if (!filePath || typeof filePath !== 'string') return true;
-  const p = filePath.toLowerCase();
-  return p.includes('edge') || p.includes('msedge') || p.includes('google\\chrome') || p.includes('google/chrome');
+async function createWindow() {
+  const iconPath = getAppIconPath();
+
+  mainWindow = new BrowserWindow({
+    width: 1240,
+    height: 820,
+    minWidth: 960,
+    minHeight: 640,
+    title: 'ikun',
+    icon: iconPath,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== uiURL) event.preventDefault(); });
+  mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
+
+  mainWindow.webContents.setWindowOpenHandler(() => {
+    return { action: 'deny' };
+  });
+
+  await mainWindow.loadFile(uiFile);
+  initTray(iconPath);
 }
 
-function resolveCleanExecutable(dataDir) {
-  // 1. 检查持久化设置中是否有用户手动指定的自定义纯净内核路径
-  const customKernelFile = path.join(dataDir, 'custom_kernel.txt');
-  if (fs.existsSync(customKernelFile)) {
-    const customExe = fs.readFileSync(customKernelFile, 'utf8').trim();
-    if (customExe && fs.existsSync(customExe) && !isForbiddenBrowser(customExe)) {
-      return customExe;
-    }
+app.whenReady().then(async () => {
+  // === 核心强锁：直接在环境变量层锁死 Playwright 的默认执行路径，杜绝任何自动搜索 Edge 行为 ===
+  const forcedChromiumPath = path.join(DATA_DIR, 'browsers', 'chromium-1148', 'chrome.exe');
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = forcedChromiumPath;
+
+  Menu.setApplicationMenu(null);
+  applyChromiumEnv();
+
+  try {
+    const requireSafeStorage = () => {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储不可用，无法安全读取或迁移代理凭据');
+    };
+    backend = await startBackend(undefined, {
+      secretStorage: {
+        encrypt: value => { requireSafeStorage(); return safeStorage.encryptString(value).toString('base64'); },
+        decrypt: value => { requireSafeStorage(); return safeStorage.decryptString(Buffer.from(value, 'base64')); },
+      },
+      resolveSystemProxy: url => session.defaultSession.resolveProxy(url),
+      downloadsDirectory: app.getPath('downloads'),
+    });
+  } catch (err) {
+    console.error('[ikun] backend failed to start:', err.message);
+    dialog.showErrorBox('ikun 无法启动', err.message);
+    app.exit(1);
+    return;
   }
+  await createWindow();
 
-  // 2. 检查标记文件
-  const marker = path.join(dataDir, 'browsers', 'chromium-executable.txt');
-  if (fs.existsSync(marker)) {
-    const exe = fs.readFileSync(marker, 'utf8').trim();
-    if (exe && fs.existsSync(exe) && !isForbiddenBrowser(exe)) {
-      return exe;
-    }
-  }
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
 
-  // 3. 扫描本地 1148 纯净版 Chromium 目录
-  const candidates = [
-    path.join(dataDir, 'browsers', 'chromium-1148', 'chrome.exe'),
-    path.join(dataDir, 'browsers', 'chromium-1148', 'chrome-win', 'chrome.exe'),
-    path.join(dataDir, 'browsers', 'chromium', 'chrome.exe'),
-    path.join(dataDir, 'browsers', 'chromium', 'chrome-win', 'chrome.exe')
-  ];
+app.on('window-all-closed', () => { 
+  if (process.platform !== 'darwin') app.quit(); 
+});
 
-  const browsersDir = path.join(dataDir, 'browsers');
-  if (fs.existsSync(browsersDir)) {
-    try {
-      for (const item of fs.readdirSync(browsersDir)) {
-        if (item.startsWith('chromium-1148')) {
-          candidates.push(path.join(browsersDir, item, 'chrome.exe'));
-          candidates.push(path.join(browsersDir, item, 'chrome-win', 'chrome.exe'));
-        }
-      }
-    } catch (_) {}
-  }
+let quitting = false;
+app.on('before-quit', event => {
+  if (quitting || !backend) return;
+  event.preventDefault();
+  quitting = true;
 
-  for (const cand of candidates) {
-    if (fs.existsSync(cand) && !isForbiddenBrowser(cand)) {
-      return cand;
-    }
-  }
+  const timer = setTimeout(() => { app.exit(0); }, 3000);
 
-  // 【核心彻底斩断】：绝不回退调用 Playwright 默认全局路径（防止自动搜寻系统 Edge）
-  return null;
+  backend.browsers.closeAll().finally(() => {
+    clearTimeout(timer);
+    backend.server?.close?.();
+    if (tray) tray.destroy();
+    app.quit();
+  });
+});
+
+// --- renderer IPC ---
+
+function handle(channel, callback) {
+  ipcMain.handle(channel, (event, ...args) => { trusted(event); return callback(event, ...args); });
 }
 
-class BrowserManager {
-  constructor(store, proxyStore = null, settings = null, options = {}) {
-    this.store = store;
-    this.proxyStore = proxyStore;
-    this.settings = settings;
-    this.downloadsDirectory = options.downloadsDirectory;
-    this.checkProxy = options.checkProxy || checkProxy;
-    this.sessions = new Map();
-    this.opening = new Map();
-    this.closing = new Map();
-    this.cancelled = new Set();
-    this.startPage = options.startPage !== false;
-    this.profileIcons = options.profileIcons !== false;
+handle('minimize-to-tray', () => {
+  if (mainWindow) mainWindow.hide();
+  return { ok: true };
+});
+
+handle('chromium-status', async () => {
+  const status = await chromiumStatus(DATA_DIR);
+  const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
+  let customPath = '';
+  if (fs.existsSync(customFile)) {
+    customPath = fs.readFileSync(customFile, 'utf8').trim();
   }
+  return { ...status, customPath };
+});
 
-  isOpen(id) { return this.sessions.has(id) || this.opening.has(id); }
-
-  listOpen() {
-    return [...this.sessions].map(([id, s]) => ({
-      profile_id: id,
-      ...(s.debugPort ? { debug_url: `http://127.0.0.1:${s.debugPort}` } : {}),
-      headless: s.headless,
-      opened_at: new Date(s.openedAt).toISOString(),
-      network: s.network
-    }));
+handle('chromium-download', async (event) => {
+  if (backend.browsers.listOpen().length || backend.browsers.opening.size) throw new Error('请先关闭所有环境再更新内核');
+  const send = (p) => event.sender.send('chromium-download-progress', p);
+  try {
+    const exe = await downloadChromium(DATA_DIR, send);
+    process.env.LFB_CHROMIUM_EXECUTABLE = exe;
+    return { ok: true, executable: exe };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
+});
 
-  async open(id, options = {}) {
-    if (this.closing.has(id)) await this.closing.get(id);
-    if (this.opening.has(id)) return this.opening.get(id);
-    this.cancelled.delete(id);
-    const pending = this._open(id, options);
-    this.opening.set(id, pending);
-    try { return await pending; } finally { this.opening.delete(id); }
+handle('save-custom-kernel', async (_, kernelPath) => {
+  if (kernelPath && (kernelPath.toLowerCase().includes('edge') || kernelPath.toLowerCase().includes('msedge'))) {
+    throw new Error('严禁使用 Microsoft Edge 内核');
   }
-
-  async _open(id, { headless = false } = {}) {
-    if (typeof headless !== 'boolean') throw Object.assign(new Error('headless 必须为布尔值'), { status: 400 });
-    if (this.sessions.has(id)) return { profile_id: id, open: true, reused: true, ...this.listOpen().find(s => s.profile_id === id) };
-    const profile = this.store.get(id);
-    if (!profile) throw Object.assign(new Error('环境不存在'), { status: 404 });
-    validateProfile(profile);
-
-    const checkCancelled = () => { if (this.cancelled.has(id)) throw Object.assign(new Error('环境启动已取消'), { status: 409 }); };
-    let proxyRecord = resolveProxy(profile, this.proxyStore);
-    const useSystemProxy = this.settings?.get().socksViaSystemProxy === true;
-    if (!proxyRecord && useSystemProxy) {
-      const route = await this.settings.route();
-      proxyRecord = inlineRecord({ server: `${route.scheme}://${route.host.includes(':') ? `[${route.host}]` : route.host}:${route.port}` });
-    }
-
-    const effective = { ...profile };
-    let network = { route: proxyRecord ? 'proxy' : 'system', exitIp: null };
-
-    if (proxyRecord) {
-      const result = await this.checkProxy(proxyRecord, this.settings);
-      checkCancelled();
-      const current = this.store.get(id);
-      if (!current || current.updatedAt !== profile.updatedAt ||
-          ((profile.proxyId || profile.proxy) && JSON.stringify(resolveProxy(current, this.proxyStore)) !== JSON.stringify(proxyRecord))) {
-        throw Object.assign(new Error('环境或代理在检测期间发生变化，请重试'), { status: 409 });
-      }
-      if (profile.proxyId) this.proxyStore.setCheckResult(profile.proxyId, result);
-      if (result.status !== 'ok') throw Object.assign(new Error(result.error || '代理连接失败，已阻止启动'), { status: 502 });
-      if (profile.timezone === 'auto') {
-        if (!result.timezone) throw Object.assign(new Error('代理出口时区未知，请重新检测或手动选择时区；不会回退到本机时区'), { status: 409 });
-        effective.timezone = result.timezone;
-      }
-      if (profile.locale === 'auto') {
-        const { localeForCountry } = require('./localemap');
-        if (!result.countryCode) throw Object.assign(new Error('代理出口地区未知，请重新检测或手动选择语言'), { status: 409 });
-        effective.locale = localeForCountry(result.countryCode);
-        if (!effective.locale) throw Object.assign(new Error('没有此代理地区的语言映射，请手动选择语言'), { status: 409 });
-      }
-      network = { route: 'proxy', exitIp: result.exitIp, checkedAt: new Date().toISOString(), timezone: effective.timezone, locale: effective.locale };
-    }
-
-    let proxy = proxyRecord ? ProxyStore.toPlaywright(proxyRecord) : null;
-    let forwarder, context;
-
-    try {
-      if (proxyRecord?.type === 'socks5' && (proxyRecord.username || proxyRecord.password || useSystemProxy)) {
-        const { SocksForwarder } = require('./socksfwd');
-        const systemProxy = useSystemProxy ? await this.settings.route(proxyRecord.host, proxyRecord.port) : null;
-        forwarder = await SocksForwarder.start({ ...proxyRecord, systemProxy });
-        proxy = { server: `http://127.0.0.1:${forwarder.port}`, bypass: '127.0.0.1,localhost,<-loopback>' };
-      } else if (proxy) {
-        proxy.bypass = '127.0.0.1,localhost,<-loopback>';
-      }
-
-      const { options } = buildContextOptions({ ...effective, proxy });
-      const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
-
-      // 铁律校验：强制获取纯净版内核，绝对阻断任何非法或 Edge 路径
-      const targetExecutable = resolveCleanExecutable(this.store.dataDir);
-      if (!targetExecutable || isForbiddenBrowser(targetExecutable)) {
-        throw new Error(`致命错误：当前未能成功定位纯净版 Chromium 内核（当前解析路径: ${targetExecutable || '空'}）。请关闭软件，删除数据目录下的 browsers/chromium-executable.txt，然后重新点击“下载 Chromium”。`);
-      }
-
-      const launchOptions = {
-        ...options,
-        headless,
-        executablePath: targetExecutable,
-        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
-        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
-        chromiumSandbox: true,
-        ignoreDefaultArgs: ['--enable-automation', '--test-type'],
-        args: [
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--site-per-process',
-          '--disable-background-mode',
-          '--disable-blink-features=AutomationControlled',
-          '--exclude-switches=enable-automation',
-          '--disable-infobars',
-          '--enforce-webrtc-ip-permission-check',
-          '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-          '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
-
-          `--class=ikun_app_${profile.id}`,
-          `--app-user-model-id=ikun.profile.app.${profile.id}`,
-
-          ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
-          ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
-          ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
-        ],
-      };
-
-      checkCancelled();
-
-      const directory = this.store.profileDir(id);
-      privateDirectory(directory);
-      await prepareDownloads(directory, this.downloadsDirectory);
-
-      context = await chromium.launchPersistentContext(directory, launchOptions);
-
-      await context.addInitScript((loc) => {
-        try {
-          if (navigator.webdriver !== false) {
-            Object.defineProperty(navigator, 'webdriver', {
-              get: () => false,
-              configurable: true
-            });
-          }
-          if (loc && loc !== 'auto') {
-            const shortLoc = loc.split('-')[0];
-            const languagesList = Array.from(new Set([loc, shortLoc, 'en-US', 'en']));
-            Object.defineProperty(navigator, 'language', {
-              get: () => loc,
-              configurable: true
-            });
-            Object.defineProperty(navigator, 'languages', {
-              get: () => languagesList,
-              configurable: true
-            });
-          }
-        } catch (_) {}
-      }, effective.locale);
-
-      if (profile.canvasMode !== 'off') {
-        const seedValue = typeof profile.id === 'string'
-          ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
-          : (Number(profile.id) || 12345);
-
-        await context.addInitScript((seed) => {
-          try {
-            const shiftR = (seed % 3) - 1;
-            const shiftG = ((seed * 3) % 3) - 1;
-            const shiftB = ((seed * 7) % 3) - 1;
-
-            const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-            CanvasRenderingContext2D.prototype.getImageData = function(...args) {
-              const imageData = originalGetImageData.apply(this, args);
-              const data = imageData.data;
-              for (let i = 0; i < data.length; i += 4) {
-                data[i] = Math.max(0, Math.min(255, data[i] + shiftR));
-                data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + shiftG));
-                data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + shiftB));
-              }
-              return imageData;
-            };
-
-            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-            HTMLCanvasElement.prototype.toDataURL = function(...args) {
-              const ctx = this.getContext('2d');
-              if (ctx && this.width > 0 && this.height > 0) {
-                try {
-                  const imgData = ctx.getImageData(0, 0, this.width, this.height);
-                  ctx.putImageData(imgData, 0, 0);
-                } catch (_) {}
-              }
-              return originalToDataURL.apply(this, args);
-            };
-
-            const hookWebGLReadPixels = (proto) => {
-              const origReadPixels = proto.readPixels;
-              proto.readPixels = function(x, y, width, height, format, type, pixels) {
-                origReadPixels.apply(this, arguments);
-                if (pixels instanceof Uint8Array && pixels.length >= 4) {
-                  for (let i = 0; i < pixels.length; i += 4) {
-                    pixels[i] = Math.max(0, Math.min(255, pixels[i] + shiftR));
-                    pixels[i + 1] = Math.max(0, Math.min(255, pixels[i + 1] + shiftG));
-                    pixels[i + 2] = Math.max(0, Math.min(255, pixels[i + 2] + shiftB));
-                  }
-                }
-              };
-            };
-
-            if (window.WebGLRenderingContext) hookWebGLReadPixels(WebGLRenderingContext.prototype);
-            if (window.WebGL2RenderingContext) hookWebGLReadPixels(WebGL2RenderingContext.prototype);
-
-            const audioOffset = ((seed % 10) + 1) * 0.0000001;
-            const hookAudioBuffer = (proto) => {
-              const origGetChannelData = proto.getChannelData;
-              proto.getChannelData = function(channel) {
-                const data = origGetChannelData.apply(this, arguments);
-                for (let i = 0; i < data.length; i += 100) {
-                  data[i] = data[i] + audioOffset;
-                }
-                return data;
-              };
-            };
-
-            if (window.AudioBuffer) hookAudioBuffer(AudioBuffer.prototype);
-
-          } catch (_) {}
-        }, seedValue);
-      }
-
-      await configureDownloads(context);
-      checkCancelled();
-
-      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
-      this.sessions.set(id, session);
-
-      context.on('close', () => {
-        if (this.sessions.get(id) === session) this.sessions.delete(id);
-        forwarder?.stop().catch(() => {});
-      });
-
-      const watchPage = page => page.on('close', () => {
-        if (!context.pages().some(p => !p.isClosed()) && this.sessions.get(id) === session) {
-          this.close(id).catch(() => {});
-        }
-      });
-
-      context.on('page', watchPage);
-      for (const page of context.pages()) watchPage(page);
-
-      if (!headless && this.startPage) {
-        await require('./startpage').openStartPage(context, profile, network, ip => {
-          if (this.sessions.get(id) !== session) return;
-          session.network = { ...session.network, exitIp: ip, checkedAt: new Date().toISOString() };
-          this.store.recordNetwork(id, session.network);
-        });
-      }
-
-      checkCancelled();
-      this.store.recordOpened(id, session.network);
-      return {
-        profile_id: id,
-        open: true,
-        reused: false,
-        headless,
-        network,
-        ...(debugPort ? { debug_url: `http://127.0.0.1:${debugPort}` } : {})
-      };
-    } catch (error) {
-      await context?.close().catch(() => {});
-      await forwarder?.stop().catch(() => {});
-      throw error;
-    }
+  const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
+  if (kernelPath) {
+    fs.writeFileSync(customFile, kernelPath, 'utf8');
+  } else if (fs.existsSync(customFile)) {
+    fs.unlinkSync(customFile);
   }
+  applyChromiumEnv();
+  return { ok: true };
+});
 
-  async close(id) {
-    if (this.closing.has(id)) return this.closing.get(id);
-    this.cancelled.add(id);
-    const pending = (async () => {
-      await this.opening.get(id)?.catch(() => {});
-      const session = this.sessions.get(id);
-      if (session) {
-        await session.context.close();
-        await session.forwarder?.stop();
-        if (this.sessions.get(id) === session) this.sessions.delete(id);
-      }
-      return { profile_id: id, open: false };
-    })();
-    this.closing.set(id, pending);
-    try { return await pending; } finally { this.closing.delete(id); this.cancelled.delete(id); }
+handle('browse-kernel', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择自定义浏览器内核可执行文件',
+    filters: [{ name: 'Executables', extensions: ['exe', 'app'] }],
+    properties: ['openFile']
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+  const filePath = result.filePaths[0];
+  if (filePath.toLowerCase().includes('edge') || filePath.toLowerCase().includes('msedge')) {
+    throw new Error('严禁选择 Microsoft Edge 内核');
   }
+  return { canceled: false, filePath };
+});
 
-  async closeAll() {
-    const ids = [...new Set([...this.opening.keys(), ...this.sessions.keys()])];
-    await Promise.all(ids.map(id => this.close(id)));
-    return { closed: ids.length };
-  }
+handle('open-data-dir', async () => {
+  shell.openPath(backend.dataDir);
+  return { ok: true };
+});
 
-  getContext(id) { return this.sessions.get(id)?.context || null; }
-}
+handle('proxy-clipboard', async () => {
+  try { return { ok: true, proxy: require('../src/proxyparse').parseProxyLine(await clipboard.readText()) }; }
+  catch { return { ok: false }; }
+});
 
-module.exports = { BrowserManager };
+handle('update-check', () => checkUpdate());
+handle('update-install', () => installUpdate());
