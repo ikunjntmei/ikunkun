@@ -178,9 +178,8 @@ class BrowserManager {
         timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
         
         chromiumSandbox: false,
-
-        // 核心：让 Playwright 显式通过我们指定的 TCP 端口连接，不走默认管道
         devtools: true,
+
         args: [
           '--no-first-run',
           '--no-default-browser-check',
@@ -214,14 +213,54 @@ class BrowserManager {
       // 标准持久化上下文
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
+      // 高级指纹与 Bot 规避初始化注入
       await context.addInitScript((loc) => {
         try {
           if (navigator.webdriver !== false) {
             Object.defineProperty(navigator, 'webdriver', {
-              get: () => false,
+              get: () => undefined,
               configurable: true
             });
           }
+
+          if (!navigator.plugins || navigator.plugins.length === 0) {
+            const mockPlugins = [
+              { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+              { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+              { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
+            ];
+            
+            const pluginArray = mockPlugins.map(p => {
+              const plugin = Object.create(Plugin.prototype);
+              Object.defineProperties(plugin, {
+                name: { value: p.name, enumerable: true },
+                filename: { value: p.filename, enumerable: true },
+                description: { value: p.description, enumerable: true },
+                length: { value: 0, enumerable: true }
+              });
+              return plugin;
+            });
+
+            Object.defineProperty(pluginArray, 'item', { value: (index) => pluginArray[index] });
+            Object.defineProperty(pluginArray, 'namedItem', { value: (name) => pluginArray.find(p => p.name === name) });
+            Object.defineProperty(navigator, 'plugins', {
+              get: () => pluginArray,
+              configurable: true
+            });
+          }
+
+          if (!window.chrome) {
+            window.chrome = {
+              app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } },
+              runtime: { OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' }, OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }, getManifest: () => ({}), getURL: () => '' },
+              loadTimes: function() {},
+              csi: function() {}
+            };
+          }
+
+          Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
+          Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+
           if (loc && loc !== 'auto') {
             const shortLoc = loc.split('-')[0];
             const languagesList = Array.from(new Set([loc, shortLoc, 'en-US', 'en']));
@@ -234,6 +273,14 @@ class BrowserManager {
               configurable: true
             });
           }
+
+          const originalQuery = window.navigator.permissions.query;
+          window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+              Promise.resolve({ state: Notification.permission }) :
+              originalQuery(parameters)
+          );
+
         } catch (_) {}
       }, effective.locale);
 
