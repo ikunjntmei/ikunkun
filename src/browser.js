@@ -116,9 +116,6 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 独立任务栏 AppUserModelID：彻底与系统原生 Google Chrome 隔离
-      const appUserModelId = `ikun.browser.profile.${profile.id || 'default'}`;
-
       const launchOptions = {
         ...options,
         headless,
@@ -134,7 +131,6 @@ class BrowserManager {
           '--disable-blink-features=AutomationControlled',
           '--exclude-switches=enable-automation',
           '--disable-infobars',
-          `--app-id=${appUserModelId}`,
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
@@ -144,7 +140,7 @@ class BrowserManager {
         ],
       };
 
-      // --- 关键：优先读取自定义配置中的独立 chrome.exe ---
+      // 1. 定位独立内核路径：优先 custom_kernel.txt -> 环境变量 -> chrome-win
       let resolvedExe = null;
       const customKernelFile = path.join(this.store.dataDir, 'custom_kernel.txt');
       if (fs.existsSync(customKernelFile)) {
@@ -167,12 +163,10 @@ class BrowserManager {
 
       checkCancelled();
 
-      // 在 Windows 平台下，如果有自定义内核，直接锁定使用该内核，防止 profileapp 替换破坏小黄鸭图标
-      if (!headless && this.profileIcons && !resolvedExe) {
-        let fallbackExecutable = launchOptions.executablePath;
-        if (!fallbackExecutable) {
-          try { fallbackExecutable = chromium.executablePath(); } catch (_) {}
-        }
+      // 2. 只有在未指定任何自定义独立内核时，才交给 profileapp 兜底
+      if (!headless && this.profileIcons && !launchOptions.executablePath) {
+        let fallbackExecutable = null;
+        try { fallbackExecutable = chromium.executablePath(); } catch (_) {}
         launchOptions.executablePath = await require('./profileapp').ensureProfileApp(
           this.store.dataDir,
           profile,
@@ -187,7 +181,7 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 1. 规范化 webdriver 并同步 navigator.languages
+      // 3. 规范化 webdriver 并同步 navigator.languages
       await context.addInitScript((loc) => {
         try {
           if (navigator.webdriver !== false) {
@@ -211,7 +205,7 @@ class BrowserManager {
         } catch (_) {}
       }, effective.locale);
 
-      // 2. 根据 profile.canvasMode 决定是否注入 Canvas 噪点
+      // 4. 根据 profile.canvasMode 注入 Canvas 噪点
       if (profile.canvasMode !== 'off') {
         const canvasSeed = typeof profile.id === 'string'
           ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
