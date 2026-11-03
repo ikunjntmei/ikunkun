@@ -116,6 +116,9 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
+      // 独立任务栏 AppUserModelID：彻底与系统原生 Google Chrome 隔离
+      const appUserModelId = `ikun.browser.profile.${profile.id || 'default'}`;
+
       const launchOptions = {
         ...options,
         headless,
@@ -131,6 +134,7 @@ class BrowserManager {
           '--disable-blink-features=AutomationControlled',
           '--exclude-switches=enable-automation',
           '--disable-infobars',
+          `--app-id=${appUserModelId}`,
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
@@ -140,17 +144,31 @@ class BrowserManager {
         ],
       };
 
-      // 自动定位独立内核：优先环境变量 -> 其次数据目录下的专属 chrome-win -> 最后回退到 Playwright 默认内核
+      // --- 关键：优先读取自定义配置中的独立 chrome.exe ---
+      let resolvedExe = null;
+      const customKernelFile = path.join(this.store.dataDir, 'custom_kernel.txt');
+      if (fs.existsSync(customKernelFile)) {
+        const saved = fs.readFileSync(customKernelFile, 'utf8').trim();
+        if (saved && fs.existsSync(saved)) resolvedExe = saved;
+      }
+
+      if (!resolvedExe && process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
+        resolvedExe = process.env.LFB_CHROMIUM_EXECUTABLE;
+      }
+
       const localIsolatedExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe');
-      if (process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
-        launchOptions.executablePath = process.env.LFB_CHROMIUM_EXECUTABLE;
-      } else if (fs.existsSync(localIsolatedExe)) {
-        launchOptions.executablePath = localIsolatedExe;
+      if (!resolvedExe && fs.existsSync(localIsolatedExe)) {
+        resolvedExe = localIsolatedExe;
+      }
+
+      if (resolvedExe) {
+        launchOptions.executablePath = resolvedExe;
       }
 
       checkCancelled();
 
-      if (!headless && this.profileIcons) {
+      // 在 Windows 平台下，如果有自定义内核，直接锁定使用该内核，防止 profileapp 替换破坏小黄鸭图标
+      if (!headless && this.profileIcons && !resolvedExe) {
         let fallbackExecutable = launchOptions.executablePath;
         if (!fallbackExecutable) {
           try { fallbackExecutable = chromium.executablePath(); } catch (_) {}
@@ -193,7 +211,7 @@ class BrowserManager {
         } catch (_) {}
       }, effective.locale);
 
-      // 2. 根据 profile.canvasMode 决定是否注入 Canvas 噪点（默认开启，设为 'off' 时关闭）
+      // 2. 根据 profile.canvasMode 决定是否注入 Canvas 噪点
       if (profile.canvasMode !== 'off') {
         const canvasSeed = typeof profile.id === 'string'
           ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
@@ -201,9 +219,9 @@ class BrowserManager {
 
         await context.addInitScript((seed) => {
           try {
-            const shiftR = (seed % 3) - 1;       // -1, 0, 1
-            const shiftG = ((seed * 3) % 3) - 1; // -1, 0, 1
-            const shiftB = ((seed * 7) % 3) - 1; // -1, 0, 1
+            const shiftR = (seed % 3) - 1;
+            const shiftG = ((seed * 3) % 3) - 1;
+            const shiftB = ((seed * 7) % 3) - 1;
 
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(...args) {
