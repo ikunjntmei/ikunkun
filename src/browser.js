@@ -116,25 +116,20 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 1. 定位独立沙盒内核路径，彻底切断系统默认 Chrome
-      const baseUserDir = process.env.USERPROFILE || 'C:\\Users\\zsc';
-      const sandboxDir = path.join(baseUserDir, '.ikun-browser', 'browsers', 'chrome-win');
-      const originExe = path.join(sandboxDir, 'chrome.exe');
-      const coreExe = path.join(sandboxDir, 'ikun-core.exe');
-
-      if (!fs.existsSync(coreExe) && fs.existsSync(originExe)) {
-        try { fs.copyFileSync(originExe, coreExe); } catch (_) {}
-      }
-
-      const targetExecutable = fs.existsSync(coreExe) ? coreExe : originExe;
-      if (!fs.existsSync(targetExecutable)) {
-        throw new Error(`未检测到可用沙盒内核: ${targetExecutable}`);
+      // 彻底解绑：优先获取 Playwright 原生纯净无标 Chromium，彻底告别 chrome.exe
+      let targetExecutable = process.env.LFB_CHROMIUM_EXECUTABLE;
+      if (!targetExecutable || !fs.existsSync(targetExecutable)) {
+        try {
+          targetExecutable = chromium.executablePath();
+        } catch (_) {
+          targetExecutable = undefined;
+        }
       }
 
       const launchOptions = {
         ...options,
         headless,
-        executablePath: targetExecutable,
+        ...(targetExecutable ? { executablePath: targetExecutable } : {}),
         locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
         timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
         chromiumSandbox: true,
