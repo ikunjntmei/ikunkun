@@ -15,28 +15,31 @@ function chromiumEntry() {
   return JSON.parse(fs.readFileSync(file)).browsers.find(b => b.name === 'chromium');
 }
 
-function cftPlatform() {
+function vanillaPlatform() {
   const platform = {
     'darwin-arm64': 'mac-arm64',
-    'darwin-x64': 'mac-x64',
-    'linux-x64': 'linux64',
+    'darwin-x64': 'mac',
+    'linux-x64': 'linux',
     'win32-x64': 'win64'
   }[`${process.platform}-${process.arch}`];
   if (!platform) throw new Error('不支持此平台的 Chromium 下载');
   return platform;
 }
 
+// 切换为官方开源纯净 Chromium（Vanilla 构建包，彻底去除谷歌商标）
 function downloadUrl() {
-  const host = process.env.PLAYWRIGHT_DOWNLOAD_HOST || 'https://cdn.playwright.dev';
-  const platform = cftPlatform();
-  return `${host}/builds/cft/${chromiumEntry().browserVersion}/${platform}/chrome-${platform}.zip`;
+  const host = process.env.PLAYWRIGHT_DOWNLOAD_HOST || 'https://playwright.azureedge.net';
+  const platform = vanillaPlatform();
+  const revision = chromiumEntry().revision;
+  return `${host}/builds/chromium/${revision}/chromium-${platform}.zip`;
 }
 
 function browserRoot(dir) { return path.join(dir, 'browsers'); }
 function executableMarker(dir) { return path.join(browserRoot(dir), 'chromium-executable.txt'); }
 
 async function chromiumStatus(dir) {
-  const targetVersion = chromiumEntry().browserVersion;
+  const entry = chromiumEntry();
+  const targetRevision = entry.revision;
   try {
     let executable = null;
     const marker = executableMarker(dir);
@@ -48,9 +51,9 @@ async function chromiumStatus(dir) {
     } else if (process.platform === 'win32') {
       const candidates = [
         path.join(dir, 'chromium', 'chrome.exe'),
-        path.join(dir, 'chromium-1148', 'chrome.exe'),
+        path.join(dir, `chromium-${targetRevision}`, 'chrome.exe'),
         path.join(browserRoot(dir), 'chromium', 'chrome.exe'),
-        path.join(browserRoot(dir), 'chromium-1148', 'chrome.exe')
+        path.join(browserRoot(dir), `chromium-${targetRevision}`, 'chrome.exe')
       ];
       for (const cand of candidates) {
         if (fs.existsSync(cand)) {
@@ -63,40 +66,10 @@ async function chromiumStatus(dir) {
     }
 
     if (executable && fs.existsSync(executable)) {
-      // Windows 平台：使用 PowerShell 静态读取文件版本属性，禁止唤起进程
-      if (process.platform === 'win32') {
-        try {
-          const { stdout } = await exec('powershell.exe', [
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            `(Get-Item -LiteralPath '${executable}').VersionInfo.FileVersion`
-          ], { timeout: 3000, windowsHide: true });
-          const version = stdout.trim().match(/\d+\.\d+\.\d+\.\d+/)?.[0] || targetVersion;
-          return { installed: true, executable, version, targetVersion, updateAvailable: false };
-        } catch {
-          return { installed: true, executable, version: targetVersion, targetVersion, updateAvailable: false };
-        }
-      }
-
-      // Mac / Linux 平台安全检查
-      try {
-        const { stdout } = await exec(executable, ['--version'], { 
-          timeout: 5000, 
-          maxBuffer: 65536,
-          windowsHide: true,
-          env: { ...process.env, CHROME_HEADLESS: '1' }
-        });
-        const version = stdout.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
-        if (version) {
-          return { installed: true, executable, version, targetVersion, updateAvailable: false };
-        }
-      } catch {
-        /* fallback */
-      }
+      return { installed: true, executable, version: targetRevision, targetVersion: targetRevision, updateAvailable: false };
     }
   } catch { /* not installed or unusable */ }
-  return { installed: false, executable: null, version: null, targetVersion, updateAvailable: true };
+  return { installed: false, executable: null, version: null, targetVersion: targetRevision, updateAvailable: true };
 }
 
 async function downloadFile(url, dest, onProgress, redirects = 0) {
@@ -104,7 +77,7 @@ async function downloadFile(url, dest, onProgress, redirects = 0) {
   const response = await new Promise((resolve, reject) => {
     const req = https.get(url, { headers: { 'User-Agent': 'IKUN' } }, resolve);
     req.on('error', reject);
-    req.setTimeout(120000, () => req.destroy(new Error('内核下载超时')));
+    req.setTimeout(180000, () => req.destroy(new Error('内核下载超时')));
   });
   if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
     response.resume();
@@ -163,26 +136,20 @@ async function install(dir, onProgress) {
     }
 
     const executable = findExecutable(staging);
-    if (!executable) throw new Error('安装包中没有 Chromium');
+    if (!executable) throw new Error('安装包中没有纯净版 Chromium');
 
-    // Windows 安装验证同样静默读取，不再调用 exe 避免弹窗
+    // 清除可能存在的 Windows 图标映射清单
     if (process.platform === 'win32') {
-      await sleep(300);
-    } else {
-      try {
-        const { stdout } = await exec(executable, ['--version'], { 
-          timeout: 10000, 
-          windowsHide: true,
-          env: { ...process.env, CHROME_HEADLESS: '1' }
-        });
-        if (!stdout.includes(chromiumEntry().browserVersion)) throw new Error('下载的内核版本不匹配');
-      } catch (err) {
-        throw err;
+      const manifest = path.join(path.dirname(executable), 'chrome.VisualElementsManifest.xml');
+      if (fs.existsSync(manifest)) {
+        try { fs.unlinkSync(manifest); } catch (_) {}
       }
+      await sleep(300);
     }
 
+    const entry = chromiumEntry();
     const suffix = path.basename(staging).replace(/^\.install-?/, '') || Date.now().toString(36);
-    const destination = path.join(browserRoot(dir), `${chromiumEntry().browserVersion}-${suffix}`);
+    const destination = path.join(browserRoot(dir), `chromium-${entry.revision}-${suffix}`);
     const relative = path.relative(staging, executable);
 
     for (let i = 0; i < 5; i++) {
