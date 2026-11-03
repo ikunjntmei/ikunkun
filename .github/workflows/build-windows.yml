@@ -28,7 +28,7 @@ jobs:
           if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
           npm install --no-audit
 
-      # 禁用自动发布，纯本地编译
+      # 禁用自动发布，仅执行本地打包
       - name: Build and Package Windows Executable
         run: npx electron-builder --win --x64 -p never
 
@@ -36,7 +36,7 @@ jobs:
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
 
-      # 使用标准 PowerShell 变量，完美兼容带中文和空格的安装包名称
+      # 拆分两步：先建立 Release，再遍历文件安全上传，彻底避免空格和中文参数错位
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         shell: pwsh
@@ -46,7 +46,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           SHA_SHORT: ${{ steps.vars.outputs.sha_short }}
         run: |
-          if ($env:IS_TAG -eq "true") {
+          if ($env:IS_TAG -eq "True" -or $env:IS_TAG -eq "true") {
             $tagName = $env:REF_NAME
             $releaseTitle = "ikun Windows Release ($env:REF_NAME)"
           } else {
@@ -54,13 +54,20 @@ jobs:
             $releaseTitle = "ikun Windows Release ($env:SHA_SHORT)"
           }
 
-          # 获取所有生成的 exe 文件完整路径
-          $files = Get-ChildItem -Path "dist/*.exe" | Select-Object -ExpandProperty FullName
+          # 1. 创建 Release（如果已存在则复用）
+          gh release view $tagName > $null 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tagName --title "$releaseTitle" --generate-notes
+          }
 
+          # 2. 遍历 dist 目录下的所有 exe 文件单独上传，完全消除多参数空格解析 Bug
+          $files = Get-ChildItem -Path "dist" -Filter "*.exe"
           if (-not $files) {
-            Write-Error "未找到 dist/*.exe 打包产物！"
+            Write-Error "dist 目录下未找到任何 exe 打包文件！"
             exit 1
           }
 
-          # 自动创建或覆盖 Release 并上传两个 exe
-          gh release create $tagName @files --title "$releaseTitle" --generate-notes --clobber
+          foreach ($file in $files) {
+            Write-Host "正在上传产物: $($file.Name)"
+            gh release upload $tagName $file.FullName --clobber
+          }
