@@ -30,7 +30,6 @@ function isForbiddenBrowser(filePath) {
 }
 
 function resolveCleanExecutable(dataDir) {
-  // 1. 检查持久化设置中是否有用户手动指定的自定义纯净内核路径
   const customKernelFile = path.join(dataDir, 'custom_kernel.txt');
   if (fs.existsSync(customKernelFile)) {
     const customExe = fs.readFileSync(customKernelFile, 'utf8').trim();
@@ -39,7 +38,6 @@ function resolveCleanExecutable(dataDir) {
     }
   }
 
-  // 2. 检查标记文件
   const marker = path.join(dataDir, 'browsers', 'chromium-executable.txt');
   if (fs.existsSync(marker)) {
     const exe = fs.readFileSync(marker, 'utf8').trim();
@@ -48,13 +46,11 @@ function resolveCleanExecutable(dataDir) {
     }
   }
 
-  // 3. 强锁：死死只认本地 1148 纯净版目录
   const bundledPath = path.join(dataDir, 'browsers', 'chromium-1148', 'chrome.exe');
   if (fs.existsSync(bundledPath) && !isForbiddenBrowser(bundledPath)) {
     return bundledPath;
   }
 
-  // 4. 动态扫描所有 1148 文件夹
   const browsersDir = path.join(dataDir, 'browsers');
   if (fs.existsSync(browsersDir)) {
     try {
@@ -69,7 +65,6 @@ function resolveCleanExecutable(dataDir) {
     } catch (_) {}
   }
 
-  // 绝对不回退，找不到返回 null 触发拦截
   return null;
 }
 
@@ -151,7 +146,7 @@ class BrowserManager {
     }
 
     let proxy = proxyRecord ? ProxyStore.toPlaywright(proxyRecord) : null;
-    let forwarder, context;
+    let forwarder, browserInstance, context;
 
     try {
       if (proxyRecord?.type === 'socks5' && (proxyRecord.username || proxyRecord.password || useSystemProxy)) {
@@ -166,24 +161,23 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = await findFreePort(4550, 4599);
 
-      // 铁律校验：强制获取纯净版内核，绝不允许加载任何 Edge 路径
       const targetExecutable = resolveCleanExecutable(this.store.dataDir);
       if (!targetExecutable || isForbiddenBrowser(targetExecutable)) {
         throw new Error(`致命错误：当前未能成功定位 1148 纯净版 Chromium 内核。请点击软件中的“下载 Chromium”进行安装！`);
       }
 
+      const directory = this.store.profileDir(id);
+      privateDirectory(directory);
+      await prepareDownloads(directory, this.downloadsDirectory);
+
       const launchOptions = {
         ...options,
         headless,
         executablePath: targetExecutable,
-        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
-        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
-        
-        // 关键防御：关闭沙盒防止触发系统底层 0x80000003 断点崩溃
         chromiumSandbox: false,
-
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
+          `--user-data-dir=${directory}`,
           '--no-first-run',
           '--no-default-browser-check',
           '--site-per-process',
@@ -194,8 +188,6 @@ class BrowserManager {
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
-
-          // 免疫 Windows 沙盒限制与图形硬件加速引发断点异常的参数
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-gpu',
@@ -204,14 +196,10 @@ class BrowserManager {
           '--disable-accelerated-2d-canvas',
           '--disable-gpu-sandbox',
           '--disable-breakpad',
-
-          // 显式绑定本地 TCP 调试端口
           `--remote-debugging-port=${debugPort}`,
           '--remote-debugging-address=127.0.0.1',
-
           `--class=ikun_app_${profile.id}`,
           `--app-user-model-id=ikun.profile.app.${profile.id}`,
-
           ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
@@ -219,12 +207,12 @@ class BrowserManager {
 
       checkCancelled();
 
-      const directory = this.store.profileDir(id);
-      privateDirectory(directory);
-      await prepareDownloads(directory, this.downloadsDirectory);
-
-      // 完美使用持久化上下文，并将 directory 作为第一个参数传入，不再在 args 中重复声明 user-data-dir
-      context = await chromium.launchPersistentContext(directory, launchOptions);
+      // ──【彻底摆脱 launchPersistentContext 的管道宿命，使用标准 launch 挂载上下文】──
+      browserInstance = await chromium.launch(launchOptions);
+      context = await browserInstance.newContext({
+        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
+        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
+      });
 
       await context.addInitScript((loc) => {
         try {
@@ -322,10 +310,10 @@ class BrowserManager {
       await configureDownloads(context);
       checkCancelled();
 
-      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
+      const session = { context, browserInstance, debugPort, headless, openedAt: Date.now(), forwarder, network };
       this.sessions.set(id, session);
 
-      context.on('close', () => {
+      browserInstance.on('disconnected', () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id);
         forwarder?.stop().catch(() => {});
       });
@@ -360,6 +348,7 @@ class BrowserManager {
     } catch (error) {
       console.error('[环境启动失败捕获] 错误详情:', error);
       await context?.close().catch(() => {});
+      await browserInstance?.close().catch(() => {});
       await forwarder?.stop().catch(() => {});
       throw error;
     }
@@ -372,8 +361,9 @@ class BrowserManager {
       await this.opening.get(id)?.catch(() => {});
       const session = this.sessions.get(id);
       if (session) {
-        await session.context.close();
-        await session.forwarder?.stop();
+        await session.context?.close().catch(() => {});
+        await session.browserInstance?.close().catch(() => {});
+        await session.forwarder?.stop().catch(() => {});
         if (this.sessions.get(id) === session) this.sessions.delete(id);
       }
       return { profile_id: id, open: false };
