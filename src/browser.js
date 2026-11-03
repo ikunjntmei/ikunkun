@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const { chromium } = require('playwright');
+const { execSync } = require('child_process');
 const { buildContextOptions, webrtcArgs, validateProfile } = require('./fingerprint');
 const { resolveProxy, inlineRecord } = require('./proxyconfig');
 const { ProxyStore } = require('./proxystore');
@@ -21,6 +22,29 @@ function findFreePort(min, max) {
     };
     next();
   });
+}
+
+/**
+ * 确保获取到 Playwright 官方原生纯净版 Chromium
+ * 若本地不存在则自动静默拉取安装，避免 Executable doesn't exist 报错
+ */
+function ensurePlaywrightKernel() {
+  let executable = '';
+  try {
+    executable = chromium.executablePath();
+  } catch (_) {}
+
+  if (!executable || !fs.existsSync(executable)) {
+    console.log('[CIKE/ikun] 未检测到 Playwright 纯净内核，正在自动安装...');
+    try {
+      execSync('npx playwright install chromium', { stdio: 'inherit' });
+      executable = chromium.executablePath();
+    } catch (err) {
+      throw new Error('下载 Playwright 官方纯净内核失败: ' + err.message);
+    }
+  }
+
+  return executable;
 }
 
 class BrowserManager {
@@ -116,20 +140,13 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 彻底解绑：优先获取 Playwright 原生纯净无标 Chromium，彻底告别 chrome.exe
-      let targetExecutable = process.env.LFB_CHROMIUM_EXECUTABLE;
-      if (!targetExecutable || !fs.existsSync(targetExecutable)) {
-        try {
-          targetExecutable = chromium.executablePath();
-        } catch (_) {
-          targetExecutable = undefined;
-        }
-      }
+      // 获取纯净版内核路径（若缺失会自动安装，绝不读取旧版 chrome.exe）
+      const targetExecutable = ensurePlaywrightKernel();
 
       const launchOptions = {
         ...options,
         headless,
-        ...(targetExecutable ? { executablePath: targetExecutable } : {}),
+        executablePath: targetExecutable,
         locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
         timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
         chromiumSandbox: true,
