@@ -846,7 +846,7 @@ async function initKernelSelectorUI() {
     if (downloadBox) downloadBox.style.display = type === 'bundled' ? 'block' : 'none';
     if (hintEl) {
       if (type === 'bundled') {
-        hintEl.textContent = '使用独立沙盒纯净 Chromium 内核，蓝白图标，安全隔离防关联。';
+        hintEl.textContent = '使用独立沙盒纯净 Chromium 内核，安全隔离防关联。';
       } else if (type === 'custom') {
         hintEl.textContent = '指定自定义的浏览器可执行文件 (.exe)，如修改版内核或 Brave 等。';
       }
