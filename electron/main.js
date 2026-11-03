@@ -40,7 +40,6 @@ ipcMain.on('connection-info', event => {
   catch { event.returnValue = {}; }
 });
 
-// 严禁加载任何 Edge，仅允许内部 Marker 或合规的自定义纯净 Chromium
 function applyChromiumEnv() {
   try {
     const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
@@ -142,6 +141,10 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // === 核心强锁：直接在环境变量层锁死 Playwright 的默认执行路径，杜绝任何自动搜索 Edge 行为 ===
+  const forcedChromiumPath = path.join(DATA_DIR, 'browsers', 'chromium-1148', 'chrome.exe');
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = forcedChromiumPath;
+
   Menu.setApplicationMenu(null);
   applyChromiumEnv();
 
