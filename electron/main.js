@@ -10,7 +10,7 @@ const path = require('path');
 const fs = require('fs');
 
 const { startBackend, DATA_DIR } = require('../src/server');
-const { chromiumStatus, downloadChromium, executableMarker, browserRoot } = require('./chromium');
+const { chromiumStatus, downloadChromium, executableMarker } = require('./chromium');
 const { checkUpdate, installUpdate } = require('./updater');
 
 let backend = null;
@@ -19,9 +19,6 @@ let tray = null;
 
 const uiFile = path.join(__dirname, 'renderer', 'index.html');
 const uiURL = pathToFileURL(uiFile).href;
-
-// 自定义内核路径保存文件位置
-const customKernelFile = path.join(DATA_DIR, 'custom_kernel.txt');
 
 if (process.env.LFB_DATA) app.setPath('userData', path.join(DATA_DIR, 'desktop'));
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -43,33 +40,9 @@ ipcMain.on('connection-info', event => {
   catch { event.returnValue = {}; }
 });
 
-// Windows 增强探测：按优先级匹配自定义内核 / Edge / duck-chrome / 沙盒 Chromium / 标记文件
+// 仅保留官方内部 Marker 标记检测，彻底拔除对系统外部 Google Chrome 的扫描与绑定
 function applyChromiumEnv() {
   try {
-    // 1. 最高优先级：检查用户是否在界面上自定义了专属内核路径
-    if (fs.existsSync(customKernelFile)) {
-      const userKernel = fs.readFileSync(customKernelFile, 'utf8').trim();
-      if (userKernel) {
-        if (userKernel.toLowerCase().includes('msedge') || userKernel.toLowerCase() === 'edge') {
-          const edgeCandidates = [
-            'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-            'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-            path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Edge\\Application\\msedge.exe')
-          ];
-          for (const cand of edgeCandidates) {
-            if (fs.existsSync(cand)) {
-              process.env.LFB_CHROMIUM_EXECUTABLE = cand;
-              return;
-            }
-          }
-        } else if (fs.existsSync(userKernel)) {
-          process.env.LFB_CHROMIUM_EXECUTABLE = userKernel;
-          return;
-        }
-      }
-    }
-
-    // 2. 次优先级：检查 markers 文件
     const marker = executableMarker(DATA_DIR);
     if (fs.existsSync(marker)) {
       const exe = fs.readFileSync(marker, 'utf8').trim();
@@ -78,43 +51,13 @@ function applyChromiumEnv() {
         return;
       }
     }
-
-    // 3. 第三优先级：检查专属沙盒目录下的独立小黄鸭或标准 chrome.exe
-    const sandboxDuck = path.join(DATA_DIR, 'browsers', 'chrome-win', 'duck-chrome.exe');
-    const sandboxChrome = path.join(DATA_DIR, 'browsers', 'chrome-win', 'chrome.exe');
-    if (fs.existsSync(sandboxDuck)) {
-      process.env.LFB_CHROMIUM_EXECUTABLE = sandboxDuck;
-      return;
-    }
-    if (fs.existsSync(sandboxChrome)) {
-      process.env.LFB_CHROMIUM_EXECUTABLE = sandboxChrome;
-      return;
-    }
-
-    // 4. 兜底备用探测
-    if (process.platform === 'win32') {
-      const candidates = [
-        path.join(DATA_DIR, 'chromium', 'chrome.exe'),
-        path.join(DATA_DIR, 'chromium-1148', 'chrome.exe'),
-        path.join(browserRoot(DATA_DIR), 'chromium', 'chrome.exe'),
-        path.join(browserRoot(DATA_DIR), 'chromium-1148', 'chrome.exe')
-      ];
-      for (const cand of candidates) {
-        if (fs.existsSync(cand)) {
-          process.env.LFB_CHROMIUM_EXECUTABLE = cand;
-          try {
-            const { privateDirectory, writePrivate } = require('../src/privatefiles');
-            privateDirectory(browserRoot(DATA_DIR));
-            writePrivate(marker, cand + '\n');
-          } catch { /* 容错忽略 */ }
-          break;
-        }
-      }
-    }
-  } catch { /* not downloaded yet */ }
+    // 未设定特定内部标记时，清空环境变量，让 Playwright 自行拉起官方纯净无标 Chromium
+    delete process.env.LFB_CHROMIUM_EXECUTABLE;
+  } catch {
+    delete process.env.LFB_CHROMIUM_EXECUTABLE;
+  }
 }
 
-// 获取适配当前系统的图标路径（Windows 优先 .ico，其它平台 .png）
 function getAppIconPath() {
   const icoPath = path.join(__dirname, 'assets', 'icon.ico');
   const pngPath = path.join(__dirname, 'assets', 'icon.png');
@@ -124,7 +67,6 @@ function getAppIconPath() {
   return fs.existsSync(pngPath) ? pngPath : undefined;
 }
 
-// 创建系统右下角托盘
 function initTray(iconPath) {
   if (tray || !iconPath) return;
 
@@ -152,7 +94,6 @@ function initTray(iconPath) {
 
   tray.setContextMenu(trayMenu);
 
-  // 单击托盘图标切换显示/隐藏
   tray.on('click', () => {
     if (!mainWindow) return;
     if (mainWindow.isVisible()) {
@@ -185,14 +126,11 @@ async function createWindow() {
   mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== uiURL) event.preventDefault(); });
   mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
 
-  // 阻止自动唤起外部 Chrome 浏览器
   mainWindow.webContents.setWindowOpenHandler(() => {
     return { action: 'deny' };
   });
 
   await mainWindow.loadFile(uiFile);
-
-  // 初始化右下角托盘
   initTray(iconPath);
 }
 
@@ -251,20 +189,12 @@ function handle(channel, callback) {
   ipcMain.handle(channel, (event, ...args) => { trusted(event); return callback(event, ...args); });
 }
 
-// 侧边栏“最小化到托盘”通道
 handle('minimize-to-tray', () => {
   if (mainWindow) mainWindow.hide();
   return { ok: true };
 });
 
 handle('chromium-status', async () => {
-  // 若配置了自定义内核或 Edge，直接反馈为已安装就绪状态
-  if (fs.existsSync(customKernelFile)) {
-    const p = fs.readFileSync(customKernelFile, 'utf8').trim();
-    if (p) {
-      return { installed: true, version: 'custom', targetVersion: 'custom', updateAvailable: false };
-    }
-  }
   return chromiumStatus(DATA_DIR);
 });
 
@@ -292,51 +222,3 @@ handle('proxy-clipboard', async () => {
 
 handle('update-check', () => checkUpdate());
 handle('update-install', () => installUpdate());
-
-// --- 自定义内核路径与选择 IPC 通道 ---
-
-// 1. 弹出 Windows 原生文件选择对话框（支持选择任意 Chromium 衍生可执行文件）
-handle('dialog:select-kernel', async () => {
-  if (!mainWindow) return null;
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择浏览器执行程序 (.exe)',
-    properties: ['openFile'],
-    filters: [
-      { name: '可执行程序 (*.exe)', extensions: ['exe'] },
-      { name: '所有文件 (*.*)', extensions: ['*'] }
-    ]
-  });
-  return result.canceled ? null : result.filePaths[0];
-});
-
-// 2. 保存自定义内核路径并实时生效
-handle('settings:save-kernel', async (_e, kernelPath) => {
-  try {
-    const p = String(kernelPath || '').trim();
-    if (p) {
-      fs.writeFileSync(customKernelFile, p, 'utf8');
-      process.env.LFB_CHROMIUM_EXECUTABLE = p;
-    } else {
-      if (fs.existsSync(customKernelFile)) {
-        fs.unlinkSync(customKernelFile);
-      }
-      delete process.env.LFB_CHROMIUM_EXECUTABLE;
-      applyChromiumEnv();
-    }
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// 3. 读取已持久化保存的自定义内核路径
-handle('settings:get-kernel', async () => {
-  try {
-    if (fs.existsSync(customKernelFile)) {
-      return fs.readFileSync(customKernelFile, 'utf8').trim();
-    }
-    return '';
-  } catch {
-    return '';
-  }
-});
