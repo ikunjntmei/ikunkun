@@ -1,3 +1,4 @@
+# ikun ignore rules
 node_modules/
 dist/
 .browsers/
