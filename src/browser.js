@@ -335,41 +335,51 @@ if (window.AudioBuffer) hookAudioBuffer(AudioBuffer.prototype);
 }, seedValue);
 }
 
-// UA 与 userAgentData 对齐：截图里 UA 是 131.0.6778.33，检测站却认成 131.0.0.0，
-// 就是因为 UA 字符串和 userAgentData 的品牌版本对不上。用 CDP 给每个页面下发同一套品牌信息。
-// 注意：platformVersion 不硬编码，留空让它用真实值，避免和真实系统对不上又多一处不一致。
+// UA 与 userAgentData 对齐（第二版）：
+// 上一版从 launchOptions.userAgent 取 UA 字符串，但 buildContextOptions 并不一定返回 userAgent，
+// 导致 uaString 为空、函数直接 return，还被 catch 静默吃掉，所以对齐根本没生效。
+// 这一版改成：先实测页面自己的 UA 和 userAgentData，只补一个缺失的 Google Chrome 品牌，
+// 其他全部保持自然值（包括 Not_A Brand 那个 24，那是内核的自然值，不用改成 99）。
+// 失败时打日志，不再静默吞掉，方便定位。
 const alignUA = async (page) => {
 try {
-const uaString = launchOptions.userAgent || options.userAgent;
-if (!uaString) return;
+if (page.isClosed()) return;
+const current = await page.evaluate(async () => {
+const data = await navigator.userAgentData.getHighEntropyValues(
+['brands', 'fullVersionList', 'platform', 'platformVersion', 'architecture', 'model', 'mobile', 'bitness']
+);
+return { ua: navigator.userAgent, data};
+});
+const uaString = current.ua;
 const ver = (uaString.match(/Chrome\/([\d.]+)/) || [])[1];
 if (!ver) return;
 const major = ver.split('.')[0];
-const platform = /Windows/.test(uaString)? 'Windows'
-: /Macintosh/.test(uaString)? 'macOS'
-: /Linux/.test(uaString)? 'Linux': undefined;
+const brands = [...(current.data.brands || [])];
+const fullVersionList = [...(current.data.fullVersionList || [])];
+if (!brands.some(b => b.brand === 'Google Chrome')) {
+brands.unshift({ brand: 'Google Chrome', version: major});
+}
+if (!fullVersionList.some(b => b.brand === 'Google Chrome')) {
+fullVersionList.unshift({ brand: 'Google Chrome', version: ver});
+}
 const metadata = {
-brands: [
-{ brand: 'Google Chrome', version: major},
-{ brand: 'Chromium', version: major},
-{ brand: 'Not-A.Brand', version: '99'},
-],
-fullVersionList: [
-{ brand: 'Google Chrome', version: ver},
-{ brand: 'Chromium', version: ver},
-{ brand: 'Not-A.Brand', version: '99.0.0.0'},
-],
+brands,
+fullVersionList,
 fullVersion: ver,
-architecture: 'x86',
-bitness: '64',
-mobile: false,
+platform: current.data.platform,
+platformVersion: current.data.platformVersion,
+architecture: current.data.architecture,
+model: current.data.model,
+mobile: current.data.mobile,
+bitness: current.data.bitness,
 };
-if (platform) metadata.platform = platform;
 const params = { userAgent: uaString, userAgentMetadata: metadata};
 if (effective.locale && effective.locale!== 'auto') params.acceptLanguage = effective.locale;
 const session = await context.newCDPSession(page);
 await session.send('Emulation.setUserAgentOverride', params);
-} catch (_) {}
+} catch (err) {
+console.log('[UA对齐失败]', err && err.message? err.message: err);
+}
 };
 context.on('page', alignUA);
 for (const page of context.pages()) alignUA(page);
