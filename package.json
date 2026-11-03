@@ -33,8 +33,7 @@
       "icon": "electron/assets/icon.ico",
       "target": [
         "nsis",
-        "portable",
-        "zip"
+        "portable"
       ]
     },
     "mac": {
@@ -50,7 +49,7 @@
       "artifactName": "${productName} 正式版 安装包.${ext}"
     },
     "portable": {
-      "artifactName": "${productName} 正式版 绿色免安装单文件.${ext}"
+      "artifactName": "${productName} 绿色免安装单文件.${ext}"
     }
   },
   "dependencies": {
