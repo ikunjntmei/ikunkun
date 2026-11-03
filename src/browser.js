@@ -146,7 +146,7 @@ class BrowserManager {
     }
 
     let proxy = proxyRecord ? ProxyStore.toPlaywright(proxyRecord) : null;
-    let forwarder, browserInstance, context;
+    let forwarder, context;
 
     try {
       if (proxyRecord?.type === 'socks5' && (proxyRecord.username || proxyRecord.password || useSystemProxy)) {
@@ -174,8 +174,13 @@ class BrowserManager {
         ...options,
         headless,
         executablePath: targetExecutable,
+        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
+        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
+        
         chromiumSandbox: false,
-        ignoreDefaultArgs: ['--enable-automation', '--test-type'],
+
+        // 核心：让 Playwright 显式通过我们指定的 TCP 端口连接，不走默认管道
+        devtools: true,
         args: [
           '--no-first-run',
           '--no-default-browser-check',
@@ -206,16 +211,8 @@ class BrowserManager {
 
       checkCancelled();
 
-      // ──【核心终极改动：使用 chromium.launch() + 传入 userDataDir 参数，彻底消灭底层管道强制注入】──
-      browserInstance = await chromium.launch({
-        ...launchOptions,
-        userDataDir: directory
-      });
-
-      context = await browserInstance.newContext({
-        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
-        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
-      });
+      // 标准持久化上下文
+      context = await chromium.launchPersistentContext(directory, launchOptions);
 
       await context.addInitScript((loc) => {
         try {
@@ -313,10 +310,10 @@ class BrowserManager {
       await configureDownloads(context);
       checkCancelled();
 
-      const session = { context, browserInstance, debugPort, headless, openedAt: Date.now(), forwarder, network };
+      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
       this.sessions.set(id, session);
 
-      browserInstance.on('disconnected', () => {
+      context.on('close', () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id);
         forwarder?.stop().catch(() => {});
       });
@@ -351,7 +348,6 @@ class BrowserManager {
     } catch (error) {
       console.error('[环境启动失败捕获] 错误详情:', error);
       await context?.close().catch(() => {});
-      await browserInstance?.close().catch(() => {});
       await forwarder?.stop().catch(() => {});
       throw error;
     }
@@ -364,9 +360,8 @@ class BrowserManager {
       await this.opening.get(id)?.catch(() => {});
       const session = this.sessions.get(id);
       if (session) {
-        await session.context?.close().catch(() => {});
-        await session.browserInstance?.close().catch(() => {});
-        await session.forwarder?.stop().catch(() => {});
+        await session.context.close();
+        await session.forwarder?.stop();
         if (this.sessions.get(id) === session) this.sessions.delete(id);
       }
       return { profile_id: id, open: false };
