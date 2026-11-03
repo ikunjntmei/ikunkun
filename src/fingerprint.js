@@ -11,6 +11,10 @@ function validateProfile(profile) {
   if (profile.platform !== HOST_PLATFORM || profile.userAgent || profile.canvasNoise || profile.hardwareConcurrency != null || profile.deviceMemory != null) {
     bad('原生一致模式使用本机平台、UA、CPU、内存与 Canvas；不支持页面级伪装');
   }
+  // 校验 Canvas 噪点选项：只允许 'noise' (增加噪点) 或 'off' (原生关闭)
+  if (profile.canvasMode && !['noise', 'off'].includes(profile.canvasMode)) {
+    bad('Canvas 指纹请选择增加噪点或关闭');
+  }
   if (!['auto', 'default', 'restricted'].includes(profile.webrtc)) bad('WebRTC 请选择自动、默认或限制直连 UDP');
   if (profile.timezone !== 'auto') {
     try { new Intl.DateTimeFormat('en', { timeZone: profile.timezone }).format(); } catch { bad('无效的 IANA 时区'); }
