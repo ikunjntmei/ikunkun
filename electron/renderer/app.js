@@ -63,9 +63,6 @@ function showPage(name) {
   const targetPage = document.getElementById('page-' + name);
   if (targetPage) targetPage.classList.remove('hidden');
   
- // const groupSec = document.getElementById('group-section');
- // if (groupSec) groupSec.style.display = name === 'profiles' ? '' : 'none';
-  
   if (name === 'new') initNewPage();
   if (name === 'profiles') loadProfiles();
   if (name === 'proxies') loadProxies();
@@ -184,6 +181,7 @@ async function saveNewProfile(openAfter = false) {
     viewport: { width: vw, height: vh },
     proxyId,
     webrtc: document.getElementById('n-webrtc')?.value || 'auto',
+    canvasMode: document.getElementById('n-canvas')?.value || 'noise',
   };
 
   try {
@@ -432,12 +430,16 @@ function openProfileModal(existing) {
       </div>
       <div class="field-row">
         <div class="field"><label>分辨率</label><select id="f-vp" class="input">${viewports.map((v) => `<option ${`${p.viewport?.width}x${p.viewport?.height}` === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
-      </div>
-      <div class="field-row">
         <div class="field"><label>WebRTC</label><select id="f-webrtc" class="input">
           <option value="auto" ${!p.webrtc || p.webrtc === 'auto' ? 'selected' : ''}>自动（限制直连 UDP）</option>
           <option value="default" ${p.webrtc === 'default' ? 'selected' : ''}>不限制（不建议选）</option>
           <option value="restricted" ${['restricted', 'disabled'].includes(p.webrtc) ? 'selected' : ''}>限制直连 UDP（可能影响通话）</option>
+        </select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Canvas 指纹</label><select id="f-canvas" class="input">
+          <option value="noise" ${p.canvasMode !== 'off' ? 'selected' : ''}>增加噪点（推荐，多环境隔离防关联）</option>
+          <option value="off" ${p.canvasMode === 'off' ? 'selected' : ''}>关闭 / 跟随系统（原生真实硬件渲染）</option>
         </select></div>
       </div>
     </details>
@@ -504,6 +506,7 @@ function openProfileModal(existing) {
         locale: body.querySelector('#f-locale').value,
         timezone: body.querySelector('#f-tz').value,
         viewport: { width: vw, height: vh },
+        canvasMode: body.querySelector('#f-canvas').value,
       };
       spec.webrtc = body.querySelector('#f-webrtc').value;
       if (proxySel.value === '__custom') {
