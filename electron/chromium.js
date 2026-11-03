@@ -26,11 +26,12 @@ function vanillaPlatform() {
   return platform;
 }
 
-// 切换为官方开源纯净 Chromium（Vanilla 构建包，彻底去除谷歌商标）
+// 采用官方稳定存档与国内镜像双协议支持的纯净无标构建包路径
 function downloadUrl() {
   const host = process.env.PLAYWRIGHT_DOWNLOAD_HOST || 'https://playwright.azureedge.net';
   const platform = vanillaPlatform();
-  const revision = chromiumEntry().revision;
+  const entry = chromiumEntry();
+  const revision = entry.revision || '1148';
   return `${host}/builds/chromium/${revision}/chromium-${platform}.zip`;
 }
 
@@ -39,7 +40,7 @@ function executableMarker(dir) { return path.join(browserRoot(dir), 'chromium-ex
 
 async function chromiumStatus(dir) {
   const entry = chromiumEntry();
-  const targetRevision = entry.revision;
+  const targetRevision = entry.revision || '1148';
   try {
     let executable = null;
     const marker = executableMarker(dir);
@@ -75,7 +76,7 @@ async function chromiumStatus(dir) {
 async function downloadFile(url, dest, onProgress, redirects = 0) {
   if (redirects > 5 || new URL(url).protocol !== 'https:') throw new Error('内核下载必须使用 HTTPS，且不能无限重定向');
   const response = await new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'IKUN' } }, resolve);
+    const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, resolve);
     req.on('error', reject);
     req.setTimeout(180000, () => req.destroy(new Error('内核下载超时')));
   });
@@ -83,7 +84,10 @@ async function downloadFile(url, dest, onProgress, redirects = 0) {
     response.resume();
     return downloadFile(new URL(response.headers.location, url).href, dest, onProgress, redirects + 1);
   }
-  if (response.statusCode !== 200) { response.resume(); throw new Error(`内核下载失败：HTTP ${response.statusCode}`); }
+  if (response.statusCode !== 200) { 
+    response.resume(); 
+    throw new Error(`内核下载失败：HTTP ${response.statusCode} (URL: ${url})`); 
+  }
   const total = Number(response.headers['content-length']) || 0;
   let done = 0;
   response.on('data', chunk => {
@@ -138,7 +142,7 @@ async function install(dir, onProgress) {
     const executable = findExecutable(staging);
     if (!executable) throw new Error('安装包中没有纯净版 Chromium');
 
-    // 清除可能存在的 Windows 图标映射清单
+    // 剔除 Windows 视觉元素映射清单，阻断官方 Chrome 图标缓存
     if (process.platform === 'win32') {
       const manifest = path.join(path.dirname(executable), 'chrome.VisualElementsManifest.xml');
       if (fs.existsSync(manifest)) {
@@ -148,8 +152,9 @@ async function install(dir, onProgress) {
     }
 
     const entry = chromiumEntry();
+    const rev = entry.revision || '1148';
     const suffix = path.basename(staging).replace(/^\.install-?/, '') || Date.now().toString(36);
-    const destination = path.join(browserRoot(dir), `chromium-${entry.revision}-${suffix}`);
+    const destination = path.join(browserRoot(dir), `chromium-${rev}-${suffix}`);
     const relative = path.relative(staging, executable);
 
     for (let i = 0; i < 5; i++) {
