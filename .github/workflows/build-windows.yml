@@ -28,7 +28,7 @@ jobs:
           if (Test-Path package-lock.json) { Remove-Item -Force package-lock.json }
           npm install --no-audit
 
-      # 1. 纯本地编译，不触发 electron-builder 内部发布
+      # 禁用内部自动发布，本地静默编译
       - name: Build and Package Windows Executable
         run: npx electron-builder --win --x64 -p never
 
@@ -36,18 +36,21 @@ jobs:
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
 
-      # 2. 改用 GitHub 原生官方 CLI 发布，彻底避免 action-gh-release 更新元数据时的 404 Bug
+      # 采用 PowerShell 完美兼容带中文和空格的安装包文件名
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        shell: bash
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', steps.vars.outputs.sha_short) }}"
-          RELEASE_TITLE="ikun Windows Release (${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || steps.vars.outputs.sha_short }})"
+          $tagName = if ("${{ github.ref }}".StartsWith("refs/tags/")) { "${{ github.ref_name }}" } else { "build-${{ steps.vars.outputs.sha_short }}" }
+          $releaseTitle = "ikun Windows Release (" + (if ("${{ github.ref }}".StartsWith("refs/tags/")) { "${{ github.ref_name }}" } else { "${{ steps.vars.outputs.sha_short }}" }) + ")"
           
-          # 创建 Release 并且只上传 dist/*.exe 两个目标文件
-          gh release create "$TAG_NAME" dist/*.exe \
-            --title "$RELEASE_TITLE" \
-            --generate-notes \
-            --clobber
+          $files = Get-ChildItem -Path "dist/*.exe" | Select-Object -ExpandProperty FullName
+
+          if (-not $files) {
+            Write-Error "未找到 dist/*.exe 打包产物！"
+            exit 1
+          }
+
+          gh release create $tagName $files --title "$releaseTitle" --generate-notes --clobber
