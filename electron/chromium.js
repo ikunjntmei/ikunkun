@@ -10,10 +10,7 @@ const exec = promisify(execFile);
 const { privateDirectory, writePrivate } = require('../src/privatefiles');
 const inProgress = new Map();
 
-function chromiumEntry() {
-  const file = path.join(path.dirname(require.resolve('playwright-core/package.json')), 'browsers.json');
-  return JSON.parse(fs.readFileSync(file)).browsers.find(b => b.name === 'chromium');
-}
+const PURE_REVISION = '1148';
 
 function vanillaPlatform() {
   const platform = {
@@ -26,21 +23,18 @@ function vanillaPlatform() {
   return platform;
 }
 
-// 采用官方稳定存档与国内镜像双协议支持的纯净无标构建包路径
+// 采用官方真实存在的 Vanilla Chromium 纯净无标稳定存档路径
 function downloadUrl() {
   const host = process.env.PLAYWRIGHT_DOWNLOAD_HOST || 'https://playwright.azureedge.net';
   const platform = vanillaPlatform();
-  const entry = chromiumEntry();
-  const revision = entry.revision || '1148';
-  return `${host}/builds/chromium/${revision}/chromium-${platform}.zip`;
+  return `${host}/builds/chromium/${PURE_REVISION}/chromium-${platform}.zip`;
 }
 
 function browserRoot(dir) { return path.join(dir, 'browsers'); }
 function executableMarker(dir) { return path.join(browserRoot(dir), 'chromium-executable.txt'); }
 
 async function chromiumStatus(dir) {
-  const entry = chromiumEntry();
-  const targetRevision = entry.revision || '1148';
+  const targetRevision = PURE_REVISION;
   try {
     let executable = null;
     const marker = executableMarker(dir);
@@ -151,10 +145,8 @@ async function install(dir, onProgress) {
       await sleep(300);
     }
 
-    const entry = chromiumEntry();
-    const rev = entry.revision || '1148';
     const suffix = path.basename(staging).replace(/^\.install-?/, '') || Date.now().toString(36);
-    const destination = path.join(browserRoot(dir), `chromium-${rev}-${suffix}`);
+    const destination = path.join(browserRoot(dir), `chromium-${PURE_REVISION}-${suffix}`);
     const relative = path.relative(staging, executable);
 
     for (let i = 0; i < 5; i++) {
