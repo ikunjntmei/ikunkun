@@ -116,13 +116,12 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 1. 绝对物理锁定：强制使用沙盒路径，彻底切断系统 Chrome 回退
+      // 1. 定位独立沙盒内核路径，彻底切断系统默认 Chrome
       const baseUserDir = process.env.USERPROFILE || 'C:\\Users\\zsc';
       const sandboxDir = path.join(baseUserDir, '.ikun-browser', 'browsers', 'chrome-win');
       const originExe = path.join(sandboxDir, 'chrome.exe');
       const coreExe = path.join(sandboxDir, 'ikun-core.exe');
 
-      // 确保 ikun-core.exe 存在，避开 Windows 的 chrome.exe 注册表图标映射
       if (!fs.existsSync(coreExe) && fs.existsSync(originExe)) {
         try { fs.copyFileSync(originExe, coreExe); } catch (_) {}
       }
@@ -151,6 +150,11 @@ class BrowserManager {
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
+
+          // 核心解绑：独立类名与独立 AppID，解耦 Windows 任务栏官方 Chrome 图标映射
+          `--class=ikun_app_${profile.id}`,
+          `--app-user-model-id=ikun.profile.app.${profile.id}`,
+
           ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
