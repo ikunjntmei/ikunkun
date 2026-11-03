@@ -1,10 +1,10 @@
 # ikun ignore rules
-node_modules/
-dist/
-.browsers/
-data/
-*.log
-.DS_Store
-*.zip
-electron/dist/
-Thumbs.db
+node_modules/ # 依赖目录
+dist/ # 打包产物
+.browsers/ # 浏览器核心
+data/ # 用户本地数据
+*.log # 日志文件
+.DS_Store # 系统文件
+*.zip # 压缩临时文件
+electron/dist/ # electron 构建产物
+Thumbs.db # 缩略图缓存
