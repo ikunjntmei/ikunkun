@@ -30,6 +30,7 @@ function isForbiddenBrowser(filePath) {
 }
 
 function resolveCleanExecutable(dataDir) {
+  // 1. 检查持久化设置中是否有用户手动指定的自定义纯净内核路径
   const customKernelFile = path.join(dataDir, 'custom_kernel.txt');
   if (fs.existsSync(customKernelFile)) {
     const customExe = fs.readFileSync(customKernelFile, 'utf8').trim();
@@ -38,6 +39,7 @@ function resolveCleanExecutable(dataDir) {
     }
   }
 
+  // 2. 检查标记文件
   const marker = path.join(dataDir, 'browsers', 'chromium-executable.txt');
   if (fs.existsSync(marker)) {
     const exe = fs.readFileSync(marker, 'utf8').trim();
@@ -46,6 +48,7 @@ function resolveCleanExecutable(dataDir) {
     }
   }
 
+  // 3. 扫描本地 1148 纯净版 Chromium 目录
   const candidates = [
     path.join(dataDir, 'browsers', 'chromium-1148', 'chrome.exe'),
     path.join(dataDir, 'browsers', 'chromium-1148', 'chrome-win', 'chrome.exe'),
@@ -71,13 +74,7 @@ function resolveCleanExecutable(dataDir) {
     }
   }
 
-  try {
-    const defaultPw = chromium.executablePath();
-    if (defaultPw && fs.existsSync(defaultPw) && !isForbiddenBrowser(defaultPw)) {
-      return defaultPw;
-    }
-  } catch (_) {}
-
+  // 【核心彻底斩断】：绝不回退调用 Playwright 默认全局路径（防止自动搜寻系统 Edge）
   return null;
 }
 
@@ -174,7 +171,7 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 铁律校验：强制获取纯净版内核，绝对阻断任何 Edge 回退
+      // 铁律校验：强制获取纯净版内核，绝对阻断任何非法或 Edge 路径
       const targetExecutable = resolveCleanExecutable(this.store.dataDir);
       if (!targetExecutable || isForbiddenBrowser(targetExecutable)) {
         throw new Error(`致命错误：当前未能成功定位纯净版 Chromium 内核（当前解析路径: ${targetExecutable || '空'}）。请关闭软件，删除数据目录下的 browsers/chromium-executable.txt，然后重新点击“下载 Chromium”。`);
