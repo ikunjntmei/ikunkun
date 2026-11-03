@@ -63,8 +63,8 @@ function showPage(name) {
   const targetPage = document.getElementById('page-' + name);
   if (targetPage) targetPage.classList.remove('hidden');
   
-  const groupSec = document.getElementById('group-section');
-  if (groupSec) groupSec.style.display = name === 'profiles' ? '' : 'none';
+ // const groupSec = document.getElementById('group-section');
+ // if (groupSec) groupSec.style.display = name === 'profiles' ? '' : 'none';
   
   if (name === 'new') initNewPage();
   if (name === 'profiles') loadProfiles();
