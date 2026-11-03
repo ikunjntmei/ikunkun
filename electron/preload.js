@@ -20,4 +20,9 @@ contextBridge.exposeInMainWorld('lfb', {
   openDataDir: () => ipcRenderer.invoke('open-data-dir'),
   checkUpdate: () => ipcRenderer.invoke('update-check'),
   installUpdate: () => ipcRenderer.invoke('update-install'),
+
+  // 自定义内核路径选择与持久化 IPC 接口
+  selectKernelFile: () => ipcRenderer.invoke('dialog:select-kernel'),
+  saveCustomKernel: (kernelPath) => ipcRenderer.invoke('settings:save-kernel', kernelPath),
+  getCustomKernel: () => ipcRenderer.invoke('settings:get-kernel'),
 });
