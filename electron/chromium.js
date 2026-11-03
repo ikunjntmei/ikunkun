@@ -66,7 +66,6 @@ async function chromiumStatus(dir) {
         path.join(browserRoot(dir), `chromium-${targetRevision}`, 'chrome-win', 'chrome.exe')
       ];
       
-      // 动态扫描 browsers 目录下的所有 1148 文件夹
       const bRoot = browserRoot(dir);
       if (fs.existsSync(bRoot)) {
         try {
