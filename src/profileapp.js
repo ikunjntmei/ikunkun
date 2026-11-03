@@ -15,16 +15,27 @@ function findAppBundle(executable) {
 function appsRoot(dataDir) { return path.join(dataDir, 'browsers', 'apps'); }
 
 /**
+ * 安全获取 asset 文件 Buffer（兼容打包后的 asar 路径）
+ */
+function getAssetBuffer(relativePath) {
+  const assetPath = path.resolve(__dirname, relativePath);
+  try {
+    return fs.readFileSync(assetPath);
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * 动态合成带编号徽标的 Windows .ico 图标
  */
-async function generateBadgeIco(baseIconPngPath, outputIcoPath, sequence) {
-  const image = await Jimp.read(baseIconPngPath);
+async function generateBadgeIco(baseBuffer, outputIcoPath, sequence) {
+  const image = await Jimp.read(baseBuffer);
   image.resize(256, 256);
 
   const font = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
   const text = String(sequence);
 
-  // 绘制右下角红色圆形角标背景
   const badgeRadius = 38;
   const badgeCenterX = 256 - badgeRadius - 6;
   const badgeCenterY = 256 - badgeRadius - 6;
@@ -40,7 +51,6 @@ async function generateBadgeIco(baseIconPngPath, outputIcoPath, sequence) {
     }
   });
 
-  // 居中打印数字编号
   const textWidth = Jimp.measureText(font, text);
   const textHeight = Jimp.measureTextHeight(font, text);
   const textX = badgeCenterX - Math.floor(textWidth / 2);
@@ -48,45 +58,43 @@ async function generateBadgeIco(baseIconPngPath, outputIcoPath, sequence) {
 
   image.print(font, textX, textY, text);
 
-  // 导出为 PNG Buffer 并转换为 Windows .ico
   const pngBuffer = await image.getBufferAsync(Jimp.MIME_PNG);
   const icoBuffer = await pngToIco(pngBuffer);
   fs.writeFileSync(outputIcoPath, icoBuffer);
 }
 
 /**
- * Windows 下处理独立环境图标与快捷方式
+ * Windows 下处理独立环境图标与快捷方式（全容错防死锁）
  */
 async function ensureWindowsProfileApp(dataDir, profile, executable) {
-  const root = appsRoot(dataDir);
-  privateDirectory(root);
+  try {
+    const root = appsRoot(dataDir);
+    privateDirectory(root);
 
-  const basePngPath = path.resolve(__dirname, '../electron/assets/icon.png');
-  const defaultIcoPath = path.resolve(__dirname, '../electron/assets/icon.ico');
-  const customIcoPath = path.join(root, `ikun-${profile.sequence || profile.id}.ico`);
-  const profileLnkPath = path.join(root, `ikun-profile-${profile.id}.lnk`);
+    const customIcoPath = path.join(root, `ikun-${profile.sequence || profile.id}.ico`);
+    const profileLnkPath = path.join(root, `ikun-profile-${profile.id}.lnk`);
 
-  // 如果专属带编号图标不存在且底图存在，动态绘制
-  if (!fs.existsSync(customIcoPath) && fs.existsSync(basePngPath)) {
-    try {
-      await generateBadgeIco(basePngPath, customIcoPath, profile.sequence || profile.id);
-    } catch (_) {}
-  }
+    // 1. 如果尚未生成当前序号的 .ico，从 Buffer 中安全读取并生成
+    if (!fs.existsSync(customIcoPath)) {
+      const basePngBuffer = getAssetBuffer('../electron/assets/icon.png');
+      if (basePngBuffer) {
+        await generateBadgeIco(basePngBuffer, customIcoPath, profile.sequence || profile.id).catch(() => {});
+      }
+    }
 
-  const finalIconPath = fs.existsSync(customIcoPath) ? customIcoPath : defaultIcoPath;
-
-  // 使用 PowerShell 生成带专属图标的 Windows 快捷方式，引导任务栏识别
-  if (fs.existsSync(finalIconPath)) {
-    try {
+    // 2. 尝试创建/更新快捷方式（设置短超时 4000ms，任何报错/超时直接静默，绝不卡死主启动）
+    if (fs.existsSync(customIcoPath) && !fs.existsSync(profileLnkPath)) {
       const psScript = `
         $WshShell = New-Object -ComObject WScript.Shell
         $Shortcut = $WshShell.CreateShortcut('${profileLnkPath.replace(/'/g, "''")}')
         $Shortcut.TargetPath = '${executable.replace(/'/g, "''")}'
-        $Shortcut.IconLocation = '${finalIconPath.replace(/'/g, "''")}, 0'
+        $Shortcut.IconLocation = '${customIcoPath.replace(/'/g, "''")}, 0'
         $Shortcut.Save()
       `;
-      await exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], { timeout: 15000 });
-    } catch (_) {}
+      await exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], { timeout: 4000 }).catch(() => {});
+    }
+  } catch (_) {
+    // 忽略所有异常，保证 executable 无论如何都能顺利返回
   }
 
   return executable;
