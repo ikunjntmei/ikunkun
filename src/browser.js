@@ -164,7 +164,8 @@ class BrowserManager {
       }
 
       const { options } = buildContextOptions({ ...effective, proxy });
-      const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
+      const debugPort = await findFreePort(4550, 4599);
+  
 
       // 铁律校验：强制获取纯净版内核，绝不允许加载任何 Edge 路径
       const targetExecutable = resolveCleanExecutable(this.store.dataDir);
