@@ -141,7 +141,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  // === 核心强锁：直接在环境变量层锁死 Playwright 的默认执行路径，杜绝任何自动搜索 Edge 行为 ===
+  // 全局强锁：将 Playwright 默认内核直接定向到本地 1148 纯净核心
   const forcedChromiumPath = path.join(DATA_DIR, 'browsers', 'chromium-1148', 'chrome.exe');
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = forcedChromiumPath;
 
@@ -226,7 +226,7 @@ handle('chromium-download', async (event) => {
   }
 });
 
-handle('save-custom-kernel', async (_, kernelPath) => {
+handle('settings:save-kernel', async (_, kernelPath) => {
   if (kernelPath && (kernelPath.toLowerCase().includes('edge') || kernelPath.toLowerCase().includes('msedge'))) {
     throw new Error('严禁使用 Microsoft Edge 内核');
   }
@@ -240,18 +240,27 @@ handle('save-custom-kernel', async (_, kernelPath) => {
   return { ok: true };
 });
 
-handle('browse-kernel', async () => {
+handle('settings:get-kernel', async () => {
+  const customFile = path.join(DATA_DIR, 'custom_kernel.txt');
+  if (fs.existsSync(customFile)) {
+    return fs.readFileSync(customFile, 'utf8').trim();
+  }
+  return '';
+});
+
+// 修复与 preload.js 的通道名称对齐：由 browse-kernel 改为 dialog:select-kernel
+handle('dialog:select-kernel', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: '选择自定义浏览器内核可执行文件',
     filters: [{ name: 'Executables', extensions: ['exe', 'app'] }],
     properties: ['openFile']
   });
-  if (result.canceled || !result.filePaths.length) return { canceled: true };
+  if (result.canceled || !result.filePaths.length) return '';
   const filePath = result.filePaths[0];
   if (filePath.toLowerCase().includes('edge') || filePath.toLowerCase().includes('msedge')) {
     throw new Error('严禁选择 Microsoft Edge 内核');
   }
-  return { canceled: false, filePath };
+  return filePath;
 });
 
 handle('open-data-dir', async () => {
