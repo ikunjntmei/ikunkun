@@ -182,6 +182,9 @@ class BrowserManager {
         // 关键防御：关闭沙盒防止触发系统底层 0x80000003 断点崩溃
         chromiumSandbox: false,
 
+        // 显式关闭 Playwright 默认内置的管道通信，强制走 TCP 端口
+        pipe: false,
+
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
           '--no-first-run',
@@ -205,7 +208,7 @@ class BrowserManager {
           '--disable-gpu-sandbox',
           '--disable-breakpad',
 
-          // 显式绑定本地 TCP 调试端口，彻底规避管道秒关
+          // 显式绑定本地 TCP 调试端口
           `--remote-debugging-port=${debugPort}`,
           '--remote-debugging-address=127.0.0.1',
 
