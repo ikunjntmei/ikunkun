@@ -12,55 +12,10 @@ function findAppBundle(executable) {
 
 function appsRoot(dataDir) { return path.join(dataDir, 'browsers', 'apps'); }
 
-/**
- * Windows 下生成彻底脱离 Chrome 标识的独立启动器（实现无图标/白纸图标状态）
- */
-async function ensureWindowsProfileApp(dataDir, profile, executable) {
-  try {
-    if (!executable || !fs.existsSync(executable)) return executable;
-
-    const root = appsRoot(dataDir);
-    privateDirectory(root);
-
-    // 为每个环境创建独立的隔离容器目录，切断与原 chrome 目录元数据的关联
-    const profileAppDir = path.join(root, `win-profile-${profile.id || profile.sequence || 'default'}`);
-    privateDirectory(profileAppDir);
-
-    const isolatedLauncher = path.join(profileAppDir, 'core-browser.exe');
-
-    // 1. 如果尚未生成独立执行文件，进行复制创建（避免硬链接共享文件元数据与图标流）
-    if (!fs.existsSync(isolatedLauncher)) {
-      try {
-        fs.copyFileSync(executable, isolatedLauncher);
-      } catch (_) {
-        return executable;
-      }
-    }
-
-    // 2. 核心：阻断与覆盖 Windows 视觉元素清单（VisualElementsManifest）
-    // 很多时候任务栏死咬 Chrome 彩色图标，就是因为原目录下的 chrome.VisualElementsManifest.xml
-    // 在这里写入一个空的清单，切断任务栏对 Google 官方图标素材的追溯，退化为无图标/纯净状态
-    const manifestFile = path.join(profileAppDir, 'core-browser.VisualElementsManifest.xml');
-    if (!fs.existsSync(manifestFile)) {
-      try {
-        const dummyManifest = `<?xml version="1.0" encoding="utf-8"?>
-<Application xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <VisualElements ShowNameOnSquare150x150Logo="on" Square150x150Logo="" Square70x70Logo="" ForegroundText="light" BackgroundColor="#ffffff"/>
-</Application>`;
-        fs.writeFileSync(manifestFile, dummyManifest, 'utf8');
-      } catch (_) {}
-    }
-
-    return isolatedLauncher;
-  } catch (_) {
-    return executable;
-  }
-}
-
 async function ensureProfileApp(dataDir, profile, executable) {
-  // 1. Windows 分支：返回去 Chrome 标识的独立启动器，恢复无图标白纸状态
+  // 1. Windows 分支：直接透传 Playwright 纯净内核路径，彻底杜绝复制产生的旧版图标关联
   if (process.platform === 'win32') {
-    return ensureWindowsProfileApp(dataDir, profile, executable);
+    return executable;
   }
 
   // 2. macOS 分支
