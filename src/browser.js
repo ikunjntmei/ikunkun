@@ -116,6 +116,7 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
+      // 干净的标准参数，去除一切会导致 Playwright CDP 连接卡住的参数
       const launchOptions = {
         ...options,
         headless,
@@ -134,41 +135,31 @@ class BrowserManager {
           '--enforce-webrtc-ip-permission-check',
           '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
           '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
-          `--app-id=ikun.profile.${profile.id}`,
           ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
           ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
       };
 
-      // 1. 精准探测本地独立内核，坚决不启动系统的 Google Chrome
-      const candidates = [
-        path.join(this.store.dataDir, 'browsers', 'chrome-win', 'duck-chrome.exe'),
-        path.join(this.store.dataDir, 'browsers', 'chrome-win', 'ikun-core.exe'),
-        path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe'),
-        path.join(this.store.dataDir, 'chromium', 'chrome.exe')
-      ];
+      // 1. 定位独立沙盒内核
+      let resolvedExe = null;
+      const targetDir = path.join(this.store.dataDir, 'browsers', 'chrome-win');
+      const duckExe = path.join(targetDir, 'duck-chrome.exe');
+      const coreExe = path.join(targetDir, 'ikun-core.exe');
+      const standardExe = path.join(targetDir, 'chrome.exe');
 
-      let targetExe = null;
-      for (const p of candidates) {
-        if (fs.existsSync(p)) {
-          targetExe = p;
-          break;
-        }
+      // 优先调度非 chrome 命名的二进制文件
+      if (fs.existsSync(duckExe)) {
+        resolvedExe = duckExe;
+      } else if (fs.existsSync(coreExe)) {
+        resolvedExe = coreExe;
+      } else if (fs.existsSync(standardExe)) {
+        resolvedExe = standardExe;
       }
 
-      if (!targetExe) {
-        throw new Error('未找到本地沙盒内核，请确认 .ikun-browser/browsers/chrome-win 目录存在！');
+      if (resolvedExe) {
+        launchOptions.executablePath = resolvedExe;
       }
-
-      // 如果目标内核叫 chrome.exe，我们在同目录下生成一份 ikun-core.exe，避开 Windows 的 Chrome 识别
-      const targetDir = path.dirname(targetExe);
-      const safeCoreExe = path.join(targetDir, 'ikun-core.exe');
-      if (!fs.existsSync(safeCoreExe)) {
-        try { fs.copyFileSync(targetExe, safeCoreExe); } catch (_) {}
-      }
-
-      launchOptions.executablePath = fs.existsSync(safeCoreExe) ? safeCoreExe : targetExe;
 
       checkCancelled();
 
@@ -202,7 +193,7 @@ class BrowserManager {
         } catch (_) {}
       }, effective.locale);
 
-      // 3. Canvas 2D + WebGL + AudioContext 三重硬件指纹噪点注入
+      // 3. Canvas 2D + WebGL + AudioContext 三重硬件指纹隔离注入
       if (profile.canvasMode !== 'off') {
         const seedValue = typeof profile.id === 'string'
           ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
