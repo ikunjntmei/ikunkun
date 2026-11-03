@@ -20,6 +20,9 @@ let tray = null;
 const uiFile = path.join(__dirname, 'renderer', 'index.html');
 const uiURL = pathToFileURL(uiFile).href;
 
+// 自定义内核路径保存文件位置
+const customKernelFile = path.join(DATA_DIR, 'custom_kernel.txt');
+
 if (process.env.LFB_DATA) app.setPath('userData', path.join(DATA_DIR, 'desktop'));
 if (!app.requestSingleInstanceLock()) app.exit(0);
 app.on('second-instance', () => { 
@@ -43,6 +46,16 @@ ipcMain.on('connection-info', event => {
 // Windows 增强探测：如果已有下载或手动放置的 Chromium，主动配置环境变量并补写标记
 function applyChromiumEnv() {
   try {
+    // 1. 最高优先级：检查用户是否在界面上自定义了专属内核路径
+    if (fs.existsSync(customKernelFile)) {
+      const userKernel = fs.readFileSync(customKernelFile, 'utf8').trim();
+      if (userKernel && fs.existsSync(userKernel)) {
+        process.env.LFB_CHROMIUM_EXECUTABLE = userKernel;
+        return;
+      }
+    }
+
+    // 2. 次优先级：检查 markers
     const marker = executableMarker(DATA_DIR);
     if (fs.existsSync(marker)) {
       const exe = fs.readFileSync(marker, 'utf8').trim();
@@ -52,6 +65,14 @@ function applyChromiumEnv() {
       }
     }
 
+    // 3. 第三优先级：检查专属沙盒目录下的独立 chrome.exe
+    const sandboxChrome = path.join(DATA_DIR, 'browsers', 'chrome-win', 'chrome.exe');
+    if (fs.existsSync(sandboxChrome)) {
+      process.env.LFB_CHROMIUM_EXECUTABLE = sandboxChrome;
+      return;
+    }
+
+    // 4. 兜底备用探测
     if (process.platform === 'win32') {
       const candidates = [
         path.join(DATA_DIR, 'chromium', 'chrome.exe'),
@@ -247,3 +268,51 @@ handle('proxy-clipboard', async () => {
 
 handle('update-check', () => checkUpdate());
 handle('update-install', () => installUpdate());
+
+// --- 新增：自定义内核路径 IPC 交互通道 ---
+
+// 1. 弹出 Windows 原生文件选择对话框
+handle('dialog:select-kernel', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择独立 Chromium 执行文件 (chrome.exe)',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Chromium 可执行程序', extensions: ['exe'] },
+      { name: '所有文件', extensions: ['*'] }
+    ]
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+// 2. 保存自定义内核路径并实时生效
+handle('settings:save-kernel', async (_e, kernelPath) => {
+  try {
+    const p = String(kernelPath || '').trim();
+    if (p) {
+      fs.writeFileSync(customKernelFile, p, 'utf8');
+      process.env.LFB_CHROMIUM_EXECUTABLE = p;
+    } else {
+      if (fs.existsSync(customKernelFile)) {
+        fs.unlinkSync(customKernelFile);
+      }
+      delete process.env.LFB_CHROMIUM_EXECUTABLE;
+      applyChromiumEnv();
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// 3. 读取已持久化保存的自定义内核路径
+handle('settings:get-kernel', async () => {
+  try {
+    if (fs.existsSync(customKernelFile)) {
+      return fs.readFileSync(customKernelFile, 'utf8').trim();
+    }
+    return '';
+  } catch {
+    return '';
+  }
+});
