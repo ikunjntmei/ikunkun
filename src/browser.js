@@ -165,7 +165,6 @@ class BrowserManager {
 
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = await findFreePort(4550, 4599);
-  
 
       // 铁律校验：强制获取纯净版内核，绝不允许加载任何 Edge 路径
       const targetExecutable = resolveCleanExecutable(this.store.dataDir);
@@ -206,11 +205,14 @@ class BrowserManager {
           '--disable-gpu-sandbox',
           '--disable-breakpad',
 
+          // 显式绑定本地 TCP 调试端口，彻底规避管道秒关
+          `--remote-debugging-port=${debugPort}`,
+          '--remote-debugging-address=127.0.0.1',
+
           `--class=ikun_app_${profile.id}`,
           `--app-user-model-id=ikun.profile.app.${profile.id}`,
 
           ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
-          ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
           ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
         ],
       };
