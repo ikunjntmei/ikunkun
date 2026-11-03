@@ -146,7 +146,7 @@ class BrowserManager {
     }
 
     let proxy = proxyRecord ? ProxyStore.toPlaywright(proxyRecord) : null;
-    let forwarder, context;
+    let forwarder, browserInstance, context;
 
     try {
       if (proxyRecord?.type === 'socks5' && (proxyRecord.username || proxyRecord.password || useSystemProxy)) {
@@ -166,6 +166,10 @@ class BrowserManager {
         throw new Error(`致命错误：当前未能成功定位 1148 纯净版 Chromium 内核。请点击软件中的“下载 Chromium”进行安装！`);
       }
 
+      const directory = this.store.profileDir(id);
+      privateDirectory(directory);
+      await prepareDownloads(directory, this.downloadsDirectory);
+
       const launchOptions = {
         ...options,
         headless,
@@ -173,7 +177,6 @@ class BrowserManager {
         chromiumSandbox: false,
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
         args: [
-          // 【已彻底移除重复的 --user-data-dir 参数，交由 launchPersistentContext 首参数统一接管】
           '--no-first-run',
           '--no-default-browser-check',
           '--site-per-process',
@@ -203,12 +206,16 @@ class BrowserManager {
 
       checkCancelled();
 
-      const directory = this.store.profileDir(id);
-      privateDirectory(directory);
-      await prepareDownloads(directory, this.downloadsDirectory);
+      // ──【核心终极改动：使用 chromium.launch() + 传入 userDataDir 参数，彻底消灭底层管道强制注入】──
+      browserInstance = await chromium.launch({
+        ...launchOptions,
+        userDataDir: directory
+      });
 
-      // ──【完美标准的持久化上下文调用：目录作为首参，参数干净无冲突】──
-      context = await chromium.launchPersistentContext(directory, launchOptions);
+      context = await browserInstance.newContext({
+        locale: effective.locale && effective.locale !== 'auto' ? effective.locale : undefined,
+        timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
+      });
 
       await context.addInitScript((loc) => {
         try {
@@ -306,10 +313,10 @@ class BrowserManager {
       await configureDownloads(context);
       checkCancelled();
 
-      const session = { context, debugPort, headless, openedAt: Date.now(), forwarder, network };
+      const session = { context, browserInstance, debugPort, headless, openedAt: Date.now(), forwarder, network };
       this.sessions.set(id, session);
 
-      context.on('close', () => {
+      browserInstance.on('disconnected', () => {
         if (this.sessions.get(id) === session) this.sessions.delete(id);
         forwarder?.stop().catch(() => {});
       });
@@ -344,6 +351,7 @@ class BrowserManager {
     } catch (error) {
       console.error('[环境启动失败捕获] 错误详情:', error);
       await context?.close().catch(() => {});
+      await browserInstance?.close().catch(() => {});
       await forwarder?.stop().catch(() => {});
       throw error;
     }
@@ -356,8 +364,9 @@ class BrowserManager {
       await this.opening.get(id)?.catch(() => {});
       const session = this.sessions.get(id);
       if (session) {
-        await session.context.close();
-        await session.forwarder?.stop();
+        await session.context?.close().catch(() => {});
+        await session.browserInstance?.close().catch(() => {});
+        await session.forwarder?.stop().catch(() => {});
         if (this.sessions.get(id) === session) this.sessions.delete(id);
       }
       return { profile_id: id, open: false };
