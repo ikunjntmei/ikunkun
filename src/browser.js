@@ -159,7 +159,7 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 规范化 webdriver 并同步 navigator.languages，杜绝检测站抓到语言环境不一致
+      // 1. 规范化 webdriver 并同步 navigator.languages
       await context.addInitScript((loc) => {
         try {
           if (navigator.webdriver !== false) {
@@ -182,6 +182,45 @@ class BrowserManager {
           }
         } catch (_) {}
       }, effective.locale);
+
+      // 2. 根据 profile.canvasMode 决定是否注入 Canvas 噪点（默认开启，设为 'off' 时关闭）
+      if (profile.canvasMode !== 'off') {
+        const canvasSeed = typeof profile.id === 'string'
+          ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
+          : (Number(profile.id) || 12345);
+
+        await context.addInitScript((seed) => {
+          try {
+            const shiftR = (seed % 3) - 1;       // -1, 0, 1
+            const shiftG = ((seed * 3) % 3) - 1; // -1, 0, 1
+            const shiftB = ((seed * 7) % 3) - 1; // -1, 0, 1
+
+            const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+            CanvasRenderingContext2D.prototype.getImageData = function(...args) {
+              const imageData = originalGetImageData.apply(this, args);
+              const data = imageData.data;
+              for (let i = 0; i < data.length; i += 4) {
+                data[i] = Math.max(0, Math.min(255, data[i] + shiftR));
+                data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + shiftG));
+                data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + shiftB));
+              }
+              return imageData;
+            };
+
+            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(...args) {
+              const ctx = this.getContext('2d');
+              if (ctx && this.width > 0 && this.height > 0) {
+                try {
+                  const imgData = ctx.getImageData(0, 0, this.width, this.height);
+                  ctx.putImageData(imgData, 0, 0);
+                } catch (_) {}
+              }
+              return originalToDataURL.apply(this, args);
+            };
+          } catch (_) {}
+        }, canvasSeed);
+      }
 
       await configureDownloads(context);
       checkCancelled();
