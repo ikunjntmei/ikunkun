@@ -152,9 +152,11 @@ class BrowserManager {
         resolvedExe = process.env.LFB_CHROMIUM_EXECUTABLE;
       }
 
-      const localIsolatedExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe');
-      if (!resolvedExe && fs.existsSync(localIsolatedExe)) {
-        resolvedExe = localIsolatedExe;
+      const localIsolatedExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'duck-chrome.exe');
+      const localStandardExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe');
+      if (!resolvedExe) {
+        if (fs.existsSync(localIsolatedExe)) resolvedExe = localIsolatedExe;
+        else if (fs.existsSync(localStandardExe)) resolvedExe = localStandardExe;
       }
 
       if (resolvedExe) {
@@ -205,18 +207,19 @@ class BrowserManager {
         } catch (_) {}
       }, effective.locale);
 
-      // 4. 根据 profile.canvasMode 注入 Canvas 噪点
+      // 4. 根据 profile.canvasMode 注入 Canvas 2D + WebGL + Audio 噪点
       if (profile.canvasMode !== 'off') {
-        const canvasSeed = typeof profile.id === 'string'
+        const seedValue = typeof profile.id === 'string'
           ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
           : (Number(profile.id) || 12345);
 
         await context.addInitScript((seed) => {
           try {
-            const shiftR = (seed % 3) - 1;
-            const shiftG = ((seed * 3) % 3) - 1;
-            const shiftB = ((seed * 7) % 3) - 1;
+            const shiftR = (seed % 3) - 1;       // -1, 0, 1
+            const shiftG = ((seed * 3) % 3) - 1; // -1, 0, 1
+            const shiftB = ((seed * 7) % 3) - 1; // -1, 0, 1
 
+            // --- A. 2D Canvas 噪点注入 ---
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(...args) {
               const imageData = originalGetImageData.apply(this, args);
@@ -240,8 +243,48 @@ class BrowserManager {
               }
               return originalToDataURL.apply(this, args);
             };
+
+            // --- B. WebGL 像素读取拦截 (readPixels) ---
+            const hookWebGLReadPixels = (proto) => {
+              const origReadPixels = proto.readPixels;
+              proto.readPixels = function(x, y, width, height, format, type, pixels) {
+                origReadPixels.apply(this, arguments);
+                if (pixels instanceof Uint8Array && pixels.length >= 4) {
+                  for (let i = 0; i < pixels.length; i += 4) {
+                    pixels[i] = Math.max(0, Math.min(255, pixels[i] + shiftR));
+                    pixels[i + 1] = Math.max(0, Math.min(255, pixels[i + 1] + shiftG));
+                    pixels[i + 2] = Math.max(0, Math.min(255, pixels[i + 2] + shiftB));
+                  }
+                }
+              };
+            };
+
+            if (window.WebGLRenderingContext) {
+              hookWebGLReadPixels(WebGLRenderingContext.prototype);
+            }
+            if (window.WebGL2RenderingContext) {
+              hookWebGLReadPixels(WebGL2RenderingContext.prototype);
+            }
+
+            // --- C. AudioContext 音频指纹波形扰动 ---
+            const audioOffset = ((seed % 10) + 1) * 0.0000001;
+            const hookAudioBuffer = (proto) => {
+              const origGetChannelData = proto.getChannelData;
+              proto.getChannelData = function(channel) {
+                const data = origGetChannelData.apply(this, arguments);
+                for (let i = 0; i < data.length; i += 100) {
+                  data[i] = data[i] + audioOffset;
+                }
+                return data;
+              };
+            };
+
+            if (window.AudioBuffer) {
+              hookAudioBuffer(AudioBuffer.prototype);
+            }
+
           } catch (_) {}
-        }, canvasSeed);
+        }, seedValue);
       }
 
       await configureDownloads(context);
