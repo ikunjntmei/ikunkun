@@ -7,3 +7,7 @@ data/
 *.zip
 electron/dist/
 Thumbs.db
+
+git add .gitignore
+git commit -m "ikun - Windows 本地多环境指纹浏览器"
+git push
