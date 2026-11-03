@@ -116,67 +116,6 @@ class BrowserManager {
       const { options } = buildContextOptions({ ...effective, proxy });
       const debugPort = process.env.LFB_EXPOSE_DEBUGGER === '1' ? await findFreePort(4550, 4599) : null;
 
-      // 1. 定位独立内核路径：优先读取 custom_kernel.txt，若未指定或配置了 Edge 则自动定位系统 Edge
-      let resolvedExe = null;
-      let isEdge = false;
-
-      const customKernelFile = path.join(this.store.dataDir, 'custom_kernel.txt');
-      if (fs.existsSync(customKernelFile)) {
-        const saved = fs.readFileSync(customKernelFile, 'utf8').trim();
-        if (saved && (saved.toLowerCase().includes('msedge') || saved.toLowerCase() === 'edge')) {
-          isEdge = true;
-        } else if (saved && fs.existsSync(saved)) {
-          resolvedExe = saved;
-          if (saved.toLowerCase().includes('msedge')) isEdge = true;
-        }
-      }
-
-      if (isEdge || process.env.LFB_USE_EDGE === '1') {
-        const edgeCandidates = [
-          'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-          'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-          path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Edge\\Application\\msedge.exe')
-        ];
-        for (const candidate of edgeCandidates) {
-          if (fs.existsSync(candidate)) {
-            resolvedExe = candidate;
-            isEdge = true;
-            break;
-          }
-        }
-      }
-
-      if (!resolvedExe && process.env.LFB_CHROMIUM_EXECUTABLE && fs.existsSync(process.env.LFB_CHROMIUM_EXECUTABLE)) {
-        resolvedExe = process.env.LFB_CHROMIUM_EXECUTABLE;
-      }
-
-      const localIsolatedExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'duck-chrome.exe');
-      const localStandardExe = path.join(this.store.dataDir, 'browsers', 'chrome-win', 'chrome.exe');
-      if (!resolvedExe) {
-        if (fs.existsSync(localIsolatedExe)) resolvedExe = localIsolatedExe;
-        else if (fs.existsSync(localStandardExe)) resolvedExe = localStandardExe;
-      }
-
-      const launchArgs = [
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--site-per-process',
-        '--disable-background-mode',
-        '--exclude-switches=enable-automation',
-        '--disable-infobars',
-        '--enforce-webrtc-ip-permission-check',
-        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-        '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
-        ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
-        ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
-        ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
-      ];
-
-      // 仅在非 Edge 内核时加入该特征消除参数，避免 Edge 启动拦截
-      if (!isEdge) {
-        launchArgs.push('--disable-blink-features=AutomationControlled');
-      }
-
       const launchOptions = {
         ...options,
         headless,
@@ -184,26 +123,46 @@ class BrowserManager {
         timezoneId: effective.timezone && effective.timezone !== 'auto' ? effective.timezone : undefined,
         chromiumSandbox: true,
         ignoreDefaultArgs: ['--enable-automation', '--test-type'],
-        args: launchArgs,
+        args: [
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--site-per-process',
+          '--disable-background-mode',
+          '--disable-blink-features=AutomationControlled',
+          '--exclude-switches=enable-automation',
+          '--disable-infobars',
+          '--enforce-webrtc-ip-permission-check',
+          '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+          '--proxy-bypass-list=127.0.0.1,localhost,<-loopback>',
+          ...(effective.locale && effective.locale !== 'auto' ? [`--lang=${effective.locale}`, `--accept-lang=${effective.locale}`] : []),
+          ...(debugPort ? [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'] : []),
+          ...webrtcArgs({ ...effective, proxy: proxy || useSystemProxy || profile.webrtc === 'auto' }),
+        ],
       };
 
-      if (resolvedExe) {
-        launchOptions.executablePath = resolvedExe;
+      // 1. 恢复纯净 profileapp 接管：彻底剥离官方 chrome.exe 的直接指向
+      // 只有在手动配置了 custom_kernel.txt 时才覆盖，否则完全交由 ensureProfileApp 封装无图标入口
+      let customExe = null;
+      const customKernelFile = path.join(this.store.dataDir, 'custom_kernel.txt');
+      if (fs.existsSync(customKernelFile)) {
+        const saved = fs.readFileSync(customKernelFile, 'utf8').trim();
+        if (saved && fs.existsSync(saved)) customExe = saved;
       }
 
-      checkCancelled();
-
-      // 2. 只有在未指定任何自定义独立内核时，才交给 profileapp 兜底
-      if (!headless && this.profileIcons && !launchOptions.executablePath) {
+      if (customExe) {
+        launchOptions.executablePath = customExe;
+      } else if (!headless && this.profileIcons) {
         let fallbackExecutable = null;
         try { fallbackExecutable = chromium.executablePath(); } catch (_) {}
+        // ensureProfileApp 会在 dataDir 动态生成无官方 AppID 绑定的启动包装，呈现默认无图标状态
         launchOptions.executablePath = await require('./profileapp').ensureProfileApp(
           this.store.dataDir,
           profile,
           fallbackExecutable
         );
-        checkCancelled();
       }
+
+      checkCancelled();
 
       const directory = this.store.profileDir(id);
       privateDirectory(directory);
@@ -211,7 +170,7 @@ class BrowserManager {
 
       context = await chromium.launchPersistentContext(directory, launchOptions);
 
-      // 3. 规范化 webdriver 并同步 navigator.languages
+      // 2. 规范化 webdriver 并同步 navigator.languages
       await context.addInitScript((loc) => {
         try {
           if (navigator.webdriver !== false) {
@@ -235,7 +194,7 @@ class BrowserManager {
         } catch (_) {}
       }, effective.locale);
 
-      // 4. 根据 profile.canvasMode 注入 Canvas 2D + WebGL + Audio 噪点
+      // 3. Canvas 2D + WebGL + AudioContext 三重硬件噪点注入（保留完整指纹隔离）
       if (profile.canvasMode !== 'off') {
         const seedValue = typeof profile.id === 'string'
           ? profile.id.split('').reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)
@@ -243,11 +202,11 @@ class BrowserManager {
 
         await context.addInitScript((seed) => {
           try {
-            const shiftR = (seed % 3) - 1;       // -1, 0, 1
-            const shiftG = ((seed * 3) % 3) - 1; // -1, 0, 1
-            const shiftB = ((seed * 7) % 3) - 1; // -1, 0, 1
+            const shiftR = (seed % 3) - 1;
+            const shiftG = ((seed * 3) % 3) - 1;
+            const shiftB = ((seed * 7) % 3) - 1;
 
-            // --- A. 2D Canvas 噪点注入 ---
+            // Canvas 2D 噪点
             const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
             CanvasRenderingContext2D.prototype.getImageData = function(...args) {
               const imageData = originalGetImageData.apply(this, args);
@@ -272,7 +231,7 @@ class BrowserManager {
               return originalToDataURL.apply(this, args);
             };
 
-            // --- B. WebGL 像素读取拦截 (readPixels) ---
+            // WebGL readPixels 噪点
             const hookWebGLReadPixels = (proto) => {
               const origReadPixels = proto.readPixels;
               proto.readPixels = function(x, y, width, height, format, type, pixels) {
@@ -287,14 +246,10 @@ class BrowserManager {
               };
             };
 
-            if (window.WebGLRenderingContext) {
-              hookWebGLReadPixels(WebGLRenderingContext.prototype);
-            }
-            if (window.WebGL2RenderingContext) {
-              hookWebGLReadPixels(WebGL2RenderingContext.prototype);
-            }
+            if (window.WebGLRenderingContext) hookWebGLReadPixels(WebGLRenderingContext.prototype);
+            if (window.WebGL2RenderingContext) hookWebGLReadPixels(WebGL2RenderingContext.prototype);
 
-            // --- C. AudioContext 音频指纹波形扰动 ---
+            // AudioContext 音频噪点
             const audioOffset = ((seed % 10) + 1) * 0.0000001;
             const hookAudioBuffer = (proto) => {
               const origGetChannelData = proto.getChannelData;
@@ -307,9 +262,7 @@ class BrowserManager {
               };
             };
 
-            if (window.AudioBuffer) {
-              hookAudioBuffer(AudioBuffer.prototype);
-            }
+            if (window.AudioBuffer) hookAudioBuffer(AudioBuffer.prototype);
 
           } catch (_) {}
         }, seedValue);
