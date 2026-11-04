@@ -417,7 +417,57 @@ if (this.sessions.get(id) === session) this.sessions.delete(id);
 forwarder?.stop().catch(() => {});
 });
 
+// 窗口超出屏幕时自动收进来，不用每个分辨率手动设：
+// 超出屏幕的来源有两个：环境里设了固定 viewport（比当前屏幕大），或者 Chromium
+// 从 profile 里恢复了上次在大屏上保存的窗口位置。两种都会让窗口比屏幕高，
+// 底部固定栏（比如去支付）被顶到屏幕外，页面滚动也救不回来。
+// 这里用页面里量到的 CSS 像素（screen.availWidth/Height），和 viewport 单位一致，
+// 不受 Windows 缩放比例影响，任何分辨率启动时都会自动收进屏幕。
+// 收敛后窗口尺寸和真实屏幕一致，反而更像真机。
+let screenAvail = null; // { width, height}，在第一个能量到的页面上量一次
+let windowClampLogged = false;
+const fitWindowToScreen = async (page) => {
+try {
+if (page.isClosed()) return;
+if (screenAvail) {
+// 已经量到屏幕了：只有固定 viewport 的页面才可能再次超高，超了就收。
+// viewport 为 null 的页面跟窗口走，窗口前面已经收过了，这里直接跳过。
+const vs = page.viewportSize();
+if (vs && (vs.width > screenAvail.width - 16 || vs.height > screenAvail.height - 48)) {
+const targetW = Math.max(320, Math.min(vs.width, screenAvail.width - 16));
+const targetH = Math.max(320, Math.min(vs.height, screenAvail.height - 48));
+await page.setViewportSize({ width: targetW, height: targetH});
+if (!windowClampLogged) {
+windowClampLogged = true;
+console.log(`[窗口] 已收进屏幕：${vs.width}x${vs.height} -> ${targetW}x${targetH}`);
+}
+}
+return;
+}
+// 还没量到屏幕：从当前页面量。chrome:// 这类特权页面量不到会抛错，
+// catch 后不标记，下个页面再试，不阻塞启动。
+const info = await page.evaluate(() => ({
+availW: window.screen.availWidth,
+availH: window.screen.availHeight,
+innerW: window.innerWidth,
+innerH: window.innerHeight,
+}));
+if (!info.availW ||!info.availH) return;
+screenAvail = { width: info.availW, height: info.availH};
+const targetW = Math.max(320, Math.min(info.innerW, info.availW - 16));
+const targetH = Math.max(320, Math.min(info.innerH, info.availH - 48));
+if (targetW < info.innerW || targetH < info.innerH) {
+await page.setViewportSize({ width: targetW, height: targetH});
+if (!windowClampLogged) {
+windowClampLogged = true;
+console.log(`[窗口] 已收进屏幕：${info.innerW}x${info.innerH} -> ${targetW}x${targetH}`);
+}
+}
+} catch (_) {}
+};
+
 const watchPage = page => {
+fitWindowToScreen(page);
 page.on('close', () => {
 if (!context.pages().some(p =>!p.isClosed()) && this.sessions.get(id) === session) {
 this.close(id).catch(() => {});
