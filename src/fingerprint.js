@@ -22,8 +22,13 @@ function validateProfile(profile) {
   if (profile.locale !== 'auto') {
     try { if (!Intl.getCanonicalLocales(profile.locale).length) bad('语言不能为空'); } catch { bad('无效的语言代码'); }
   }
-  const { width, height } = profile.viewport || {};
-  if (![width, height].every(n => Number.isInteger(n) && n >= 320 && n <= 7680)) bad('窗口尺寸必须在 320–7680 之间');
+  
+  // 校验窗口尺寸（如果用户设置了固定 viewport）
+  if (profile.viewport) {
+    const { width, height } = profile.viewport;
+    if (![width, height].every(n => Number.isInteger(n) && n >= 320 && n <= 7680)) bad('窗口尺寸必须在 320–7680 之间');
+  }
+
   if (!(profile.deviceScaleFactor >= 0.5 && profile.deviceScaleFactor <= 4)) bad('无效的缩放比例');
   if (!['light', 'dark', 'no-preference'].includes(profile.colorScheme)) bad('无效的外观设置');
 }
@@ -31,7 +36,8 @@ function validateProfile(profile) {
 function buildContextOptions(profile) {
   validateProfile(profile);
   const options = {
-    viewport: profile.viewport,
+    // 关键改动：如果用户未指定或支持自适应，则设为 null，使视口随浏览器窗口大小自由缩放，防止长弹窗溢出屏幕
+    viewport: profile.viewport || null,
     deviceScaleFactor: profile.deviceScaleFactor,
     colorScheme: profile.colorScheme,
     // 关闭 Playwright 底层自动接管下载管道，防止其自动触发 CDP 会话
